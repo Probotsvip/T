@@ -150,7 +150,8 @@ class APIService:
             cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
             
             if cached_content:
-                logger.info(f"✅ CACHE HIT! Found in Telegram: {cached_content['title']}")
+                logger.info(f"✅ TELEGRAM CACHE HIT! Serving from cache: {cached_content['title']}")
+                logger.info(f"🚫 Skipping download - already cached in Telegram!")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'telegram_cache_hit')
                 
@@ -166,7 +167,7 @@ class APIService:
                     'quality': cached_content.get('quality', quality),
                     'file_size': cached_content.get('file_size', 'Unknown'),
                     'upload_date': cached_content.get('upload_date', 'Unknown'),
-                    'stream_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
+                    'telegram_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
                 }
             
             # 🚀 STEP 2: Check MongoDB backup cache (second priority)
@@ -174,14 +175,15 @@ class APIService:
             existing_cache = await self._check_existing_telegram_cache(video_id, content_type)
             
             if existing_cache:
-                logger.info(f"✅ BACKUP CACHE HIT! Found in MongoDB: {existing_cache['title']}")
+                logger.info(f"✅ MONGODB CACHE HIT! Serving from backup cache: {existing_cache['title']}")
+                logger.info(f"🚫 Skipping download - already exists in Telegram!")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'mongodb_cache_hit')
                 
                 return {
                     'status': True,
                     'cached': True,
-                    'source': 'mongodb_backup',
+                    'source': 'mongodb_backup_cache',
                     'video_id': video_id,
                     'title': existing_cache['title'],
                     'duration': existing_cache['duration'],
@@ -190,7 +192,7 @@ class APIService:
                     'quality': existing_cache.get('quality', quality),
                     'file_size': existing_cache.get('file_size', 'Unknown'),
                     'upload_date': existing_cache.get('upload_date', 'Unknown'),
-                    'stream_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
+                    'telegram_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
                 }
             
             # 🚀 STEP 3: Cache miss - hit external API (last resort)
