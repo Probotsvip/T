@@ -12,7 +12,10 @@ from database.simple_mongo import (
 )
 from models_simple import User, APIKey
 from services.api_service import api_service
-from simple_telegram import telegram_cache
+from services.telegram_cache import TelegramCache
+
+# Initialize the full Telegram cache system  
+telegram_cache = TelegramCache()
 from config import ADMIN_USERNAME, ADMIN_PASSWORD
 from utils.logging import LOGGER
 

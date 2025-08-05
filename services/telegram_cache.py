@@ -79,7 +79,7 @@ class TelegramCache:
         """Professional cache checking with comprehensive metadata"""
         try:
             cache_collection = get_content_cache_collection()
-            if not cache_collection:
+            if cache_collection is None:
                 logger.warning("Cache collection not available")
                 return None
             
@@ -122,7 +122,10 @@ class TelegramCache:
                         }
                     )
                     
-                    logger.info(f"✅ Professional cache hit: {youtube_id} ({content_type})")
+                    logger.info(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")
+                    logger.info(f"📁 File ID: {cached_content['telegram_file_id']}")
+                    logger.info(f"📺 Quality: {cached_content.get('quality', 'default')}")
+                    print(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")  # Console output
                     return {
                         'telegram_file_id': cached_content['telegram_file_id'],
                         'title': cached_content['title'],
@@ -261,7 +264,7 @@ class TelegramCache:
         """Check if content already exists by hash"""
         try:
             cache_collection = get_content_cache_collection()
-            if not cache_collection:
+            if cache_collection is None:
                 return False
             existing = await cache_collection.find_one({
                 'content_hash': content_hash,
@@ -396,6 +399,9 @@ class TelegramCache:
         """Save comprehensive cache entry with professional metadata"""
         try:
             cache_collection = get_content_cache_collection()
+            if cache_collection is None:
+                logger.warning("Cache collection not available for saving entry")
+                return
             
             cache_entry = {
                 'youtube_id': video_info['video_id'],

@@ -9,7 +9,10 @@ from database.simple_mongo import (
 )
 from models_simple import UsageStats, ConcurrentUser
 from services.youtube_downloader import YouTubeDownloader
-from simple_telegram import telegram_cache
+from services.telegram_cache import TelegramCache
+
+# Initialize the full Telegram cache system
+telegram_cache = TelegramCache()
 from config import TELEGRAM_CHANNEL_ID
 from utils.logging import LOGGER
 
@@ -150,8 +153,12 @@ class APIService:
             cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
             
             if cached_content:
-                logger.info(f"✅ TELEGRAM CACHE HIT! Serving from cache: {cached_content['title']}")
-                logger.info(f"🚫 Skipping download - already cached in Telegram!")
+                logger.info(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")
+                logger.info(f"📁 File ID: {cached_content.get('telegram_file_id')}")
+                logger.info(f"📺 Quality: {cached_content.get('quality', 'default')}")
+                logger.info(f"🚫 Skipping download - video already cached in Telegram channel!")
+                print(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")  # Console output
+                print(f"📁 File ID: {cached_content.get('telegram_file_id')}")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'telegram_cache_hit')
                 
@@ -213,12 +220,21 @@ class APIService:
             
             # Cache the content in background with MongoDB Atlas  
             logger.info(f"🚀 Starting background Telegram caching for: {download_result['title']}")
-            # Use thread executor to avoid event loop conflicts
+            # Use thread executor with proper event loop handling
+            import concurrent.futures
             import threading
-            threading.Thread(
-                target=lambda: asyncio.run(self._cache_content_background(download_result)),
-                daemon=True
-            ).start()
+            
+            def run_caching_in_thread():
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self._cache_content_background(download_result))
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"Background caching thread failed: {e}")
+            
+            threading.Thread(target=run_caching_in_thread, daemon=True).start()
             
             response_time = (datetime.utcnow() - start_time).total_seconds()
             await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'success')
@@ -320,14 +336,34 @@ class APIService:
             logger.error(f"Error saving Telegram cache: {e}")
 
     async def _cache_content_background(self, download_result: Dict[str, Any]):
-        """Background task - Download file and upload to Telegram"""
+        """Cache content in background using professional Telegram system"""
         try:
-            video_id = download_result['video_id']
-            title = download_result['title']
-            download_url = download_result['download_url']
+            video_info = {
+                'video_id': download_result.get('video_id'),
+                'title': download_result.get('title', 'Unknown'),
+                'duration': download_result.get('duration', 0),
+                'source_url': download_result.get('source_url'),
+                'thumbnail': download_result.get('thumbnail'),
+                'uploader': download_result.get('uploader', 'YouTube')
+            }
             
-            logger.info(f"🔄 Background: Starting download for {title} (ID: {video_id})")
-            print(f"🔄 Background: Starting download for {title} (ID: {video_id})")  # Console output
+            # Use the professional Telegram cache system
+            telegram_file_id = await telegram_cache.download_and_cache(
+                download_url=download_result['download_url'],
+                video_info=video_info
+            )
+            
+            cached_result = {'cached': telegram_file_id is not None, 'telegram_file_id': telegram_file_id}
+            
+            if cached_result and cached_result.get('cached'):
+                logger.info(f"✅ Professional Telegram cache completed: {video_info['title']}")
+                logger.info(f"📁 File ID: {cached_result.get('telegram_file_id')}")
+                logger.info(f"📊 Size: {cached_result.get('file_size', 0) / (1024*1024):.1f}MB")
+            else:
+                logger.warning(f"⚠️ Professional cache failed for: {video_info['title']}")
+                
+        except Exception as e:
+            logger.error(f"Background professional caching failed: {e}")
             
             # Create new event loop for background task to avoid "Event loop is closed" 
             try:
