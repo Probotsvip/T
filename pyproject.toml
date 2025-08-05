@@ -1,0 +1,22 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "aioredis>=2.0.1",
+    "asyncio-mqtt>=0.16.2",
+    "cryptography>=45.0.5",
+    "email-validator>=2.2.0",
+    "flask>=3.1.1",
+    "flask-sqlalchemy>=3.1.1",
+    "gunicorn>=23.0.0",
+    "httpx>=0.28.1",
+    "motor>=3.7.1",
+    "psycopg2-binary>=2.9.10",
+    "pymongo>=4.13.2",
+    "python-dotenv>=1.1.1",
+    "python-telegram-bot>=22.3",
+    "redis>=6.3.0",
+    "werkzeug>=3.1.3",
+]

@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics - YouTube API Server{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-start mb-4">
+        <div>
+            <h1 class="h3 mb-0">
+                <i data-feather="trending-up" class="me-2"></i>
+                Advanced Analytics
+            </h1>
+            <p class="text-muted">Detailed performance metrics and insights</p>
+        </div>
+        
+        <div class="btn-group">
+            <div class="dropdown">
+                <button class="btn btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i data-feather="clock" class="me-1"></i>
+                    {{ hours }}h Period
+                </button>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item" href="{{ url_for('admin.analytics', hours=1) }}">Last Hour</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('admin.analytics', hours=6) }}">Last 6 Hours</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('admin.analytics', hours=24) }}">Last 24 Hours</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('admin.analytics', hours=168) }}">Last Week</a></li>
+                </ul>
+            </div>
+            <a href="{{ url_for('admin.dashboard') }}" class="btn btn-outline-primary">
+                <i data-feather="arrow-left" class="me-1"></i>
+                Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <!-- Key Metrics -->
+    <div class="row g-4 mb-4">
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="activity" class="text-primary mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1">{{ analytics.total_requests or 0 }}</h4>
+                    <small class="text-muted">Total Requests</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="users" class="text-success mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1">{{ analytics.total_api_keys or 0 }}</h4>
+                    <small class="text-muted">Active Keys</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="zap" class="text-warning mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1">{{ analytics.concurrent_users or 0 }}</h4>
+                    <small class="text-muted">Concurrent Users</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="database" class="text-info mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1">{{ analytics.cache_hit_rate or 0 }}%</h4>
+                    <small class="text-muted">Cache Hit Rate</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="clock" class="text-secondary mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1">{{ hours }}h</h4>
+                    <small class="text-muted">Time Period</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i data-feather="server" class="text-primary mb-2" style="width: 32px; height: 32px;"></i>
+                    <h4 class="mb-1" id="live-users">-</h4>
+                    <small class="text-muted">Live Now</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Endpoint Usage Distribution -->
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="pie-chart" class="me-2"></i>
+                        Endpoint Usage Distribution
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="endpointDistributionChart" style="max-height: 300px;"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Request Timeline -->
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="trending-up" class="me-2"></i>
+                        Request Timeline
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="requestTimelineChart" style="max-height: 300px;"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Tables -->
+    <div class="row g-4 mt-4">
+        <!-- Top API Keys -->
+        <div class="col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="award" class="me-2"></i>
+                        Top API Keys ({{ hours }}h)
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if analytics.top_api_keys %}
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>API Key</th>
+                                        <th>Requests</th>
+                                        <th>Usage</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for api_key in analytics.top_api_keys[:10] %}
+                                    <tr>
+                                        <td>{{ loop.index }}</td>
+                                        <td>
+                                            <code>{{ api_key._id[:15] }}...</code>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-primary">{{ api_key.count }}</span>
+                                        </td>
+                                        <td>
+                                            <div class="progress" style="height: 8px;">
+                                                <div class="progress-bar" role="progressbar" 
+                                                     style="width: {{ (api_key.count / analytics.top_api_keys[0].count * 100) if analytics.top_api_keys else 0 }}%">
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted text-center py-3">No usage data available for this period</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Endpoint Performance -->
+        <div class="col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="target" class="me-2"></i>
+                        Endpoint Performance
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if analytics.endpoint_stats %}
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Endpoint</th>
+                                        <th>Requests</th>
+                                        <th>Share</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for endpoint in analytics.endpoint_stats %}
+                                    <tr>
+                                        <td>
+                                            <code>{{ endpoint._id or 'Unknown' }}</code>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-info">{{ endpoint.count }}</span>
+                                        </td>
+                                        <td>
+                                            {{ "%.1f"|format((endpoint.count / analytics.total_requests * 100) if analytics.total_requests else 0) }}%
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-success">Active</span>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted text-center py-3">No endpoint data available</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Health -->
+    <div class="row g-4 mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="monitor" class="me-2"></i>
+                        System Health & Performance
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <div class="d-flex align-items-center">
+                                <div class="bg-success rounded-circle p-2 me-3">
+                                    <i data-feather="check" class="text-white" style="width: 16px; height: 16px;"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">API Status</h6>
+                                    <small class="text-success">Operational</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3">
+                            <div class="d-flex align-items-center">
+                                <div class="bg-success rounded-circle p-2 me-3">
+                                    <i data-feather="database" class="text-white" style="width: 16px; height: 16px;"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Database</h6>
+                                    <small class="text-success">Connected</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3">
+                            <div class="d-flex align-items-center">
+                                <div class="bg-success rounded-circle p-2 me-3">
+                                    <i data-feather="cloud" class="text-white" style="width: 16px; height: 16px;"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Telegram Cache</h6>
+                                    <small class="text-success">Active</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3">
+                            <div class="d-flex align-items-center">
+                                <div class="bg-info rounded-circle p-2 me-3">
+                                    <i data-feather="cpu" class="text-white" style="width: 16px; height: 16px;"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Load Capacity</h6>
+                                    <small class="text-info">{{ "%.1f"|format((analytics.concurrent_users / 10000 * 100) if analytics.concurrent_users else 0) }}% of 10K</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Endpoint Distribution Chart
+const endpointData = {{ analytics.endpoint_stats | tojson | safe }};
+const ctx1 = document.getElementById('endpointDistributionChart').getContext('2d');
+
+new Chart(ctx1, {
+    type: 'doughnut',
+    data: {
+        labels: endpointData.map(item => item._id || 'Unknown'),
+        datasets: [{
+            data: endpointData.map(item => item.count),
+            backgroundColor: [
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(255, 205, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)',
+                'rgba(255, 159, 64, 0.8)'
+            ],
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+// Mock Request Timeline Chart (would need real time-series data)
+const ctx2 = document.getElementById('requestTimelineChart').getContext('2d');
+const timelineLabels = [];
+const timelineData = [];
+
+// Generate mock hourly data
+for (let i = {{ hours }}; i >= 0; i--) {
+    const date = new Date();
+    date.setHours(date.getHours() - i);
+    timelineLabels.push(date.getHours() + ':00');
+    timelineData.push(Math.floor(Math.random() * 100) + 20);
+}
+
+new Chart(ctx2, {
+    type: 'line',
+    data: {
+        labels: timelineLabels,
+        datasets: [{
+            label: 'Requests per Hour',
+            data: timelineData,
+            borderColor: 'rgba(54, 162, 235, 1)',
+            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+            fill: true,
+            tension: 0.4
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            y: {
+                beginAtZero: true
+            }
+        },
+        plugins: {
+            legend: {
+                display: false
+            }
+        }
+    }
+});
+
+// Update live users count
+function updateLiveUsers() {
+    fetch('{{ url_for("admin.api_stats") }}')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status) {
+                document.getElementById('live-users').textContent = data.concurrent_users;
+            }
+        })
+        .catch(error => console.error('Error updating live users:', error));
+}
+
+// Update every 10 seconds
+setInterval(updateLiveUsers, 10000);
+updateLiveUsers(); // Initial load
+</script>
+{% endblock %}

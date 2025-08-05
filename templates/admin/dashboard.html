@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - YouTube API Server{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-start mb-4">
+        <div>
+            <h1 class="h3 mb-0">
+                <i data-feather="bar-chart-2" class="me-2"></i>
+                Admin Dashboard
+            </h1>
+            <p class="text-muted">Enterprise-grade YouTube API management and analytics</p>
+        </div>
+        
+        <div class="btn-group">
+            <a href="{{ url_for('admin.api_keys') }}" class="btn btn-primary">
+                <i data-feather="key" class="me-1"></i>
+                Manage API Keys
+            </a>
+            <a href="{{ url_for('admin.analytics') }}" class="btn btn-outline-primary">
+                <i data-feather="trending-up" class="me-1"></i>
+                Analytics
+            </a>
+            <a href="{{ url_for('admin.logout') }}" class="btn btn-outline-danger">
+                <i data-feather="log-out" class="me-1"></i>
+                Logout
+            </a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <!-- Real-time Stats -->
+    <div class="row g-4 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h6 class="card-title">Concurrent Users</h6>
+                            <h2 class="mb-0" id="concurrent-users-count">{{ concurrent_users }}</h2>
+                            <small>Real-time active connections</small>
+                        </div>
+                        <div>
+                            <i data-feather="users" style="width: 48px; height: 48px;"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-3 col-md-6">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h6 class="card-title">Total Requests (24h)</h6>
+                            <h2 class="mb-0">{{ analytics.total_requests or 0 }}</h2>
+                            <small>API requests processed</small>
+                        </div>
+                        <div>
+                            <i data-feather="activity" style="width: 48px; height: 48px;"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-3 col-md-6">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h6 class="card-title">Cache Hit Rate</h6>
+                            <h2 class="mb-0">{{ analytics.cache_hit_rate or 0 }}%</h2>
+                            <small>Efficient caching performance</small>
+                        </div>
+                        <div>
+                            <i data-feather="database" style="width: 48px; height: 48px;"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-3 col-md-6">
+            <div class="card bg-warning text-dark">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h6 class="card-title">Active API Keys</h6>
+                            <h2 class="mb-0">{{ analytics.total_api_keys or 0 }}</h2>
+                            <small>Registered API keys</small>
+                        </div>
+                        <div>
+                            <i data-feather="key" style="width: 48px; height: 48px;"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Endpoint Usage Chart -->
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="bar-chart" class="me-2"></i>
+                        Endpoint Usage (Last 24h)
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="endpointChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Top API Keys -->
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="trending-up" class="me-2"></i>
+                        Top API Keys
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if analytics.top_api_keys %}
+                        {% for api_key in analytics.top_api_keys[:5] %}
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <small class="text-muted">{{ api_key._id[:20] }}...</small>
+                            </div>
+                            <span class="badge bg-primary">{{ api_key.count }}</span>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-muted">No data available</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Actions -->
+    <div class="row g-4 mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i data-feather="settings" class="me-2"></i>
+                        System Management
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <form method="POST" action="{{ url_for('admin.cleanup_cache') }}">
+                                <div class="input-group">
+                                    <input type="number" class="form-control" name="days" value="30" min="1" max="365">
+                                    <button type="submit" class="btn btn-outline-warning">
+                                        <i data-feather="trash-2" class="me-1"></i>
+                                        Cleanup Cache
+                                    </button>
+                                </div>
+                                <small class="text-muted">Remove cache entries older than X days</small>
+                            </form>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <button type="button" class="btn btn-outline-info w-100" onclick="refreshStats()">
+                                <i data-feather="refresh-cw" class="me-1"></i>
+                                Refresh Statistics
+                            </button>
+                            <small class="text-muted">Update real-time dashboard data</small>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <a href="{{ url_for('api_docs') }}" class="btn btn-outline-primary w-100" target="_blank">
+                                <i data-feather="external-link" class="me-1"></i>
+                                API Documentation
+                            </a>
+                            <small class="text-muted">View complete API reference</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Endpoint Usage Chart
+const endpointData = {{ analytics.endpoint_stats | tojson | safe }};
+const ctx = document.getElementById('endpointChart').getContext('2d');
+
+new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+        labels: endpointData.map(item => item._id || 'Unknown'),
+        datasets: [{
+            data: endpointData.map(item => item.count),
+            backgroundColor: [
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(255, 205, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)'
+            ],
+            borderColor: [
+                'rgba(54, 162, 235, 1)',
+                'rgba(255, 99, 132, 1)',
+                'rgba(255, 205, 86, 1)',
+                'rgba(75, 192, 192, 1)',
+                'rgba(153, 102, 255, 1)'
+            ],
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+// Real-time stats refresh
+function refreshStats() {
+    fetch('{{ url_for("admin.api_stats") }}')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status) {
+                document.getElementById('concurrent-users-count').textContent = data.concurrent_users;
+                updateConcurrentUsers(data.concurrent_users);
+            }
+        })
+        .catch(error => console.error('Error refreshing stats:', error));
+}
+
+// Auto-refresh every 30 seconds
+setInterval(refreshStats, 30000);
+</script>
+{% endblock %}
