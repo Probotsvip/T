@@ -1,4 +1,6 @@
 import asyncio
+import io
+import httpx
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from database.mongo import (
@@ -171,8 +173,9 @@ class APIService:
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'error')
                 return download_result
             
-            # Cache the content in background
-            asyncio.create_task(self._cache_content_background(download_result))
+            # Start background download and Telegram caching
+            logger.info(f"Starting background caching for: {download_result['title']}")
+            asyncio.create_task(self._background_telegram_cache(download_result))
             
             response_time = (datetime.utcnow() - start_time).total_seconds()
             await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'success')
@@ -199,21 +202,80 @@ class APIService:
                 'error': str(e)
             }
     
-    async def _cache_content_background(self, download_result: Dict[str, Any]):
-        """Background task to cache content in Telegram"""
+    async def _background_telegram_cache(self, download_result: Dict[str, Any]):
+        """Background task - Download file and upload to Telegram"""
         try:
-            telegram_file_id = await telegram_cache.download_and_cache(
-                download_result['download_url'],
-                download_result
-            )
+            video_id = download_result['video_id']
+            title = download_result['title']
+            download_url = download_result['download_url']
             
-            if telegram_file_id:
-                logger.info(f"Background caching completed: {telegram_file_id}")
-            else:
-                logger.warning("Background caching failed")
+            logger.info(f"🔄 Background: Starting download for {title}")
+            
+            # Download the file
+            session = httpx.AsyncClient(timeout=300.0)
+            
+            async with session.stream('GET', download_url) as response:
+                if response.status_code != 200:
+                    logger.error(f"❌ Background: Download failed {response.status_code}")
+                    return
+                
+                # Create in-memory file for Telegram upload
+                file_content = io.BytesIO()
+                total_size = 0
+                
+                logger.info(f"📥 Background: Downloading {title}...")
+                
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    file_content.write(chunk)
+                    total_size += len(chunk)
+                    
+                    # Size limit for Telegram (50MB)
+                    if total_size > 50 * 1024 * 1024:
+                        logger.warning(f"⚠️ Background: File too large ({total_size/1024/1024:.1f}MB) for Telegram")
+                        await session.aclose()
+                        return
+                
+                file_content.seek(0)
+                await session.aclose()
+                
+                logger.info(f"📤 Background: Downloaded {total_size/1024/1024:.1f}MB, uploading to Telegram...")
+                
+                # Upload to Telegram
+                from telegram import Bot
+                from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
+                
+                bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                
+                # Determine file type and upload
+                content_type = download_result.get('type', 'video')
+                quality = download_result.get('quality', '360')
+                extension = 'mp3' if content_type == 'audio' else 'mp4'
+                filename = f"{title[:50]}.{extension}"
+                
+                if content_type == 'audio':
+                    message = await bot.send_audio(
+                        chat_id=TELEGRAM_CHANNEL_ID,
+                        audio=file_content,
+                        title=title,
+                        filename=filename,
+                        caption=f"🎵 {title}\nVideo ID: {video_id}"
+                    )
+                    telegram_file_id = message.audio.file_id
+                else:
+                    message = await bot.send_video(
+                        chat_id=TELEGRAM_CHANNEL_ID,
+                        video=file_content,
+                        caption=f"🎬 {title}\nQuality: {quality}p\nVideo ID: {video_id}",
+                        filename=filename
+                    )
+                    telegram_file_id = message.video.file_id
+                
+                logger.info(f"✅ Background: Successfully uploaded to Telegram! File ID: {telegram_file_id}")
                 
         except Exception as e:
-            logger.error(f"Background caching error: {e}")
+            logger.error(f"❌ Background caching error: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
     
     async def get_analytics_data(self, hours: int = 24) -> Dict[str, Any]:
         """Get analytics data for admin dashboard"""
