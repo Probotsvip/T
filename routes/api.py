@@ -201,27 +201,7 @@ def get_info():
             'message': str(e)
         }), 500
 
-@api_bp.route('/status', methods=['GET'])
-def get_status():
-    """Get API status and statistics"""
-    try:
-        concurrent_users = run_async(api_service.get_concurrent_user_count())
-        
-        return jsonify({
-            'status': True,
-            'server_time': datetime.utcnow().isoformat(),
-            'concurrent_users': concurrent_users,
-            'api_version': '1.0',
-            'message': 'API is running normally'
-        })
-        
-    except Exception as e:
-        logger.error(f"Status API error: {e}")
-        return jsonify({
-            'status': False,
-            'error': 'Internal server error',
-            'message': str(e)
-        }), 500
+
 
 @api_bp.route('/cache/stats', methods=['GET'])
 def get_cache_stats():

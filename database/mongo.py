@@ -19,12 +19,15 @@ class MongoDB:
                 maxPoolSize=100,  # Support high concurrency
                 minPoolSize=10,
                 maxIdleTimeMS=30000,
-                waitQueueMultiple=10000  # Support 10k+ concurrent users
+                waitQueueMultiple=10000,  # Support 10k+ concurrent users
+                serverSelectionTimeoutMS=3000,  # Quick timeout for faster startup
+                connectTimeoutMS=3000,
+                socketTimeoutMS=3000
             )
             self.db = self.client.youtube_api
             
-            # Test connection
-            await self.client.admin.command('ping')
+            # Test connection with timeout
+            await asyncio.wait_for(self.client.admin.command('ping'), timeout=3.0)
             logger.info("Successfully connected to MongoDB")
             
         except Exception as e:

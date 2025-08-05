@@ -49,9 +49,9 @@
                 
                 <ul class="navbar-nav">
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('admin.dashboard') }}">
+                        <a class="nav-link" href="{{ url_for('api.get_status') }}">
                             <i data-feather="settings" class="me-1"></i>
-                            Admin Panel
+                            API Status
                         </a>
                     </li>
                 </ul>
@@ -110,9 +110,9 @@
                             </a>
                         </div>
                         <div class="col-md-6">
-                            <a href="{{ url_for('admin.dashboard') }}" class="btn btn-outline-primary btn-lg w-100">
-                                <i data-feather="settings" class="me-2"></i>
-                                Admin Dashboard
+                            <a href="{{ url_for('api.get_status') }}" class="btn btn-outline-primary btn-lg w-100">
+                                <i data-feather="activity" class="me-2"></i>
+                                API Status
                             </a>
                         </div>
                     </div>
