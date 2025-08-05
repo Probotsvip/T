@@ -205,7 +205,7 @@
 {% block scripts %}
 <script>
 // Endpoint Usage Chart
-const endpointData = {{ analytics.endpoint_stats | tojson | safe }};
+const endpointData = {{ (analytics.endpoint_stats | default([])) | tojson | safe }};
 const ctx = document.getElementById('endpointChart').getContext('2d');
 
 new Chart(ctx, {
