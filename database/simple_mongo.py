@@ -58,34 +58,34 @@ def get_db():
 def get_users_collection():
     """Get users collection"""
     db = get_db()
-    if db:
+    if db is not None:
         return db.users
     return None
 
 def get_api_keys_collection():
     """Get api_keys collection"""
     db = get_db()
-    if db:
+    if db is not None:
         return db.api_keys
     return None
 
 def get_content_cache_collection():
     """Get content_cache collection"""
     db = get_db()
-    if db:
+    if db is not None:
         return db.content_cache
     return None
 
 def get_usage_stats_collection():
     """Get usage_stats collection"""
     db = get_db()
-    if db:
+    if db is not None:
         return db.usage_stats
     return None
 
 def get_concurrent_users_collection():
     """Get concurrent_users collection"""
     db = get_db()
-    if db:
+    if db is not None:
         return db.concurrent_users
     return None
