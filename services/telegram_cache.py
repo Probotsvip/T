@@ -5,9 +5,23 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, BinaryIO, List
 import httpx
-from telegram import Bot
-from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter
-from telegram.constants import ParseMode
+try:
+    from telegram import Bot
+    from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter
+    from telegram.constants import ParseMode
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    # Fallback classes
+    class Bot:
+        def __init__(self, token): pass
+    class TelegramError(Exception): pass
+    class BadRequest(TelegramError): pass
+    class NetworkError(TelegramError): pass
+    class TimedOut(TelegramError): pass
+    class RetryAfter(TelegramError): pass
+    class ParseMode:
+        HTML = "HTML"
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
 from database.simple_mongo import get_content_cache_collection
 from models_simple import ContentCache
@@ -17,8 +31,20 @@ logger = LOGGER(__name__)
 
 class TelegramCache:
     def __init__(self):
-        self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        self.channel_id = TELEGRAM_CHANNEL_ID
+        self.telegram_available = TELEGRAM_AVAILABLE and TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID
+        if self.telegram_available:
+            try:
+                self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                self.channel_id = TELEGRAM_CHANNEL_ID
+            except Exception as e:
+                logger.error(f"Telegram bot initialization failed: {e}")
+                self.telegram_available = False
+                self.bot = None
+                self.channel_id = None
+        else:
+            self.bot = None
+            self.channel_id = None
+            
         self.session = None
         self.upload_semaphore = asyncio.Semaphore(3)  # Limit concurrent uploads
         self.retry_delays = [1, 2, 5, 10, 30]  # Exponential backoff
@@ -53,6 +79,9 @@ class TelegramCache:
         """Professional cache checking with comprehensive metadata"""
         try:
             cache_collection = get_content_cache_collection()
+            if not cache_collection:
+                logger.warning("Cache collection not available")
+                return None
             
             # Build sophisticated query with fallback logic
             primary_query = {
@@ -123,6 +152,11 @@ class TelegramCache:
     
     async def download_and_cache(self, download_url: str, video_info: Dict[str, Any]) -> Optional[str]:
         """Professional download and cache with advanced features"""
+        # Return None if Telegram not available - this is normal operation
+        if not self.telegram_available:
+            logger.info(f"Telegram caching not available for: {video_info.get('title', 'Unknown')}")
+            return None
+            
         async with self.upload_semaphore:  # Limit concurrent uploads
             try:
                 session = await self.get_session()
@@ -210,6 +244,8 @@ class TelegramCache:
     
     async def _verify_telegram_file(self, telegram_file_id: str) -> bool:
         """Verify if Telegram file still exists and is accessible"""
+        if not self.telegram_available or not self.bot:
+            return False
         try:
             file_info = await self.bot.get_file(telegram_file_id)
             return file_info and file_info.file_path
@@ -225,6 +261,8 @@ class TelegramCache:
         """Check if content already exists by hash"""
         try:
             cache_collection = get_content_cache_collection()
+            if not cache_collection:
+                return False
             existing = await cache_collection.find_one({
                 'content_hash': content_hash,
                 'status': 'active'

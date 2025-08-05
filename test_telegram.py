@@ -1,35 +1,47 @@
 #!/usr/bin/env python3
-import asyncio
-import io
-import httpx
-from telegram import Bot
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
+"""
+Test Telegram Integration
+"""
 
-async def test_telegram_upload():
-    """Test direct Telegram upload"""
+import asyncio
+from services.telegram_cache import TelegramCache
+from utils.logging import LOGGER
+
+logger = LOGGER(__name__)
+
+async def test_telegram():
+    """Test Telegram bot integration"""
+    
+    print("🧪 Testing Telegram Integration")
+    print("=" * 40)
+    
     try:
-        print("🔄 Testing Telegram upload...")
+        # Initialize cache
+        cache = TelegramCache()
         
-        # Test with small dummy file
-        file_content = io.BytesIO(b"Test video content for YouTube API Server")
-        file_content.seek(0)
+        print(f"📱 Telegram Available: {cache.telegram_available}")
+        print(f"🤖 Bot: {cache.bot is not None}")
+        print(f"📢 Channel ID: {cache.channel_id}")
         
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        
-        message = await bot.send_document(
-            chat_id=TELEGRAM_CHANNEL_ID,
-            document=file_content,
-            filename="test_upload.txt",
-            caption="🎬 Test upload from YouTube API Server\nVideo ID: test123"
-        )
-        
-        print(f"✅ Successfully uploaded to Telegram! File ID: {message.document.file_id}")
-        return True
+        if cache.telegram_available:
+            print("✅ Telegram integration is working")
+            
+            # Test cache check
+            test_video_id = "dQw4w9WgXcQ"
+            cache_result = await cache.check_cache(test_video_id, "video", "360")
+            print(f"📦 Cache check result: {cache_result is not None}")
+            
+        else:
+            print("❌ Telegram integration not available")
+            print("   Reasons could be:")
+            print("   • Bot token missing or invalid")
+            print("   • Channel ID missing or invalid")
+            print("   • python-telegram-bot package issues")
+            
+        await cache.close_session()
         
     except Exception as e:
-        print(f"❌ Telegram upload error: {e}")
-        return False
+        print(f"❌ Telegram test failed: {e}")
 
 if __name__ == "__main__":
-    result = asyncio.run(test_telegram_upload())
-    print(f"Test result: {'Success' if result else 'Failed'}")
+    asyncio.run(test_telegram())
