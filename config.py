@@ -1,7 +1,8 @@
 import os
 
-# MongoDB Configuration
-MONGO_DB_URI = os.getenv("MONGO_DB_URI", "mongodb://localhost:27017/youtube_api")
+# MongoDB Configuration - Real Atlas Connection
+MONGO_DB_URI = os.getenv("MONGO_DB_URI", "mongodb+srv://jaydipmore74:xCpTm5OPAfRKYnif@cluster0.5jo18.mongodb.net/?retryWrites=true&w=majority")
+MONGODB_DATABASE = "youtube_api_db"
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = "7412125068:AAE_xef9Tgq0MZXpknz3-WPPKK7hl6t3im0"

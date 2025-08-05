@@ -173,9 +173,8 @@ class APIService:
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'error')
                 return download_result
             
-            # Start background download and Telegram caching
-            logger.info(f"Starting background caching for: {download_result['title']}")
-            asyncio.create_task(self._background_telegram_cache(download_result))
+            # Cache the content in background with MongoDB Atlas
+            asyncio.create_task(self._cache_content_background(download_result))
             
             response_time = (datetime.utcnow() - start_time).total_seconds()
             await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'success')
@@ -202,7 +201,7 @@ class APIService:
                 'error': str(e)
             }
     
-    async def _background_telegram_cache(self, download_result: Dict[str, Any]):
+    async def _cache_content_background(self, download_result: Dict[str, Any]):
         """Background task - Download file and upload to Telegram"""
         try:
             video_id = download_result['video_id']

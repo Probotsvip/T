@@ -214,14 +214,16 @@ def analytics():
 def api_stats():
     """API endpoint for real-time stats (for AJAX)"""
     try:
-        # Demo mode stats (MongoDB connection required for real stats)
+        # Real MongoDB Atlas stats
+        concurrent_users = run_async(api_service.get_concurrent_user_count())
+        analytics = run_async(api_service.get_analytics_data(1))  # Last hour
+        
         return jsonify({
             'status': True,
-            'concurrent_users': 0,
-            'hourly_requests': 0,
-            'cache_hit_rate': 0,
-            'timestamp': datetime.utcnow().isoformat(),
-            'note': 'Demo mode - MongoDB connection required for real statistics'
+            'concurrent_users': concurrent_users,
+            'hourly_requests': analytics.get('total_requests', 0),
+            'cache_hit_rate': analytics.get('cache_hit_rate', 0),
+            'timestamp': datetime.utcnow().isoformat()
         })
         
     except Exception as e:

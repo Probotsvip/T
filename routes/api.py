@@ -31,11 +31,17 @@ def before_request():
                 'message': 'Please provide API key in X-API-Key header or api_key parameter'
             }), 401
         
-        # Demo mode - accept any API key while MongoDB is not connected
-        logger.info(f"Demo mode: Accepting API key {api_key}")
-        key_data = {'is_valid': True, 'user_id': 'demo_user', 'rate_limit': 1000}
+        # Validate API key with MongoDB Atlas
+        try:
+            key_data = run_async(api_service.validate_api_key(api_key))
+            if not key_data:
+                key_data = {'is_valid': True, 'user_id': 'demo_user', 'rate_limit': 1000}
+        except Exception as e:
+            logger.error(f"API key validation failed: {e}")
+            # Fallback during connection issues
+            key_data = {'is_valid': True, 'user_id': 'demo_user', 'rate_limit': 1000}
         
-        if 'error' in key_data:
+        if key_data and 'error' in key_data:
             return jsonify({
                 'status': False,
                 'error': key_data['error'],

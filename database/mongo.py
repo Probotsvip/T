@@ -24,7 +24,7 @@ class MongoDB:
                 connectTimeoutMS=3000,
                 socketTimeoutMS=3000
             )
-            self.db = self.client.youtube_api
+            self.db = self.client.youtube_api_db
             
             # Test connection with timeout
             await asyncio.wait_for(self.client.admin.command('ping'), timeout=3.0)
