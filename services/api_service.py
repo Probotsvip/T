@@ -173,8 +173,14 @@ class APIService:
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'error')
                 return download_result
             
-            # Cache the content in background with MongoDB Atlas
-            asyncio.create_task(self._cache_content_background(download_result))
+            # Cache the content in background with MongoDB Atlas  
+            logger.info(f"🚀 Starting background Telegram caching for: {download_result['title']}")
+            # Use thread executor to avoid event loop conflicts
+            import threading
+            threading.Thread(
+                target=lambda: asyncio.run(self._cache_content_background(download_result)),
+                daemon=True
+            ).start()
             
             response_time = (datetime.utcnow() - start_time).total_seconds()
             await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'success')
@@ -208,7 +214,17 @@ class APIService:
             title = download_result['title']
             download_url = download_result['download_url']
             
-            logger.info(f"🔄 Background: Starting download for {title}")
+            logger.info(f"🔄 Background: Starting download for {title} (ID: {video_id})")
+            print(f"🔄 Background: Starting download for {title} (ID: {video_id})")  # Console output
+            
+            # Create new event loop for background task to avoid "Event loop is closed" 
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop, create new one
+                logger.info("🔄 Background: Creating new event loop")
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             
             # Download the file
             session = httpx.AsyncClient(timeout=300.0)
@@ -223,6 +239,7 @@ class APIService:
                 total_size = 0
                 
                 logger.info(f"📥 Background: Downloading {title}...")
+                print(f"📥 Background: Downloading {title}...")  # Console output
                 
                 async for chunk in response.aiter_bytes(chunk_size=8192):
                     file_content.write(chunk)
