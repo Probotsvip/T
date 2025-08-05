@@ -16,8 +16,9 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "pymongo>=4.13.2",
     "python-dotenv>=1.1.1",
-    "python-telegram-bot>=22.3",
+    "python-telegram-bot==21.3",
     "redis>=6.3.0",
     "sqlalchemy>=2.0.42",
+    "telegram>=0.0.1",
     "werkzeug>=3.1.3",
 ]
