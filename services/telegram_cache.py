@@ -1,10 +1,13 @@
 import asyncio
 import io
-from datetime import datetime
-from typing import Optional, Dict, Any, BinaryIO
+import os
+import hashlib
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, BinaryIO, List
 import httpx
-from telegram import Bot
-from telegram.error import TelegramError
+from telegram import Bot, InputFile
+from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter
+from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
 from database.mongo import get_content_cache_collection
 from models import ContentCache
@@ -17,13 +20,26 @@ class TelegramCache:
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
         self.channel_id = TELEGRAM_CHANNEL_ID
         self.session = None
+        self.upload_semaphore = asyncio.Semaphore(3)  # Limit concurrent uploads
+        self.retry_delays = [1, 2, 5, 10, 30]  # Exponential backoff
+        self.max_file_size = 50 * 1024 * 1024  # 50MB Telegram limit
+        self.max_caption_length = 1024  # Telegram caption limit
         
     async def get_session(self):
-        """Get HTTP session for file downloads"""
+        """Get optimized HTTP session for file downloads"""
         if not self.session:
             self.session = httpx.AsyncClient(
-                timeout=300.0,  # 5 minutes for large files
-                limits=httpx.Limits(max_keepalive_connections=50, max_connections=500)
+                timeout=httpx.Timeout(300.0, connect=30.0),  # 5 minutes for large files, 30s connect
+                limits=httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=100,
+                    keepalive_expiry=300.0
+                ),
+                headers={
+                    'User-Agent': 'YouTube-API-Server/2.0 (Professional Cache System)',
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate'
+                }
             )
         return self.session
     
@@ -34,122 +50,123 @@ class TelegramCache:
             self.session = None
     
     async def check_cache(self, youtube_id: str, content_type: str, quality: str = None) -> Optional[Dict[str, Any]]:
-        """Check if content exists in Telegram cache"""
+        """Professional cache checking with comprehensive metadata"""
         try:
             cache_collection = get_content_cache_collection()
             
-            query = {
+            # Build sophisticated query with fallback logic
+            primary_query = {
                 'youtube_id': youtube_id,
-                'file_type': content_type
+                'file_type': content_type,
+                'status': 'active'  # Only active cache entries
             }
             
             if quality and content_type == 'video':
-                query['quality'] = quality
+                primary_query['quality'] = quality
             
-            cached_content = await cache_collection.find_one(query)
+            # Try exact match first
+            cached_content = await cache_collection.find_one(primary_query)
+            
+            # Fallback: Find any quality for video if exact not found
+            if not cached_content and content_type == 'video' and quality:
+                fallback_query = {
+                    'youtube_id': youtube_id,
+                    'file_type': content_type,
+                    'status': 'active'
+                }
+                cached_content = await cache_collection.find_one(fallback_query)
+                if cached_content:
+                    logger.info(f"🔄 Using fallback quality {cached_content.get('quality')} for {youtube_id}")
             
             if cached_content:
-                # Update access stats
-                await cache_collection.update_one(
-                    {'_id': cached_content['_id']},
-                    {
-                        '$inc': {'access_count': 1},
-                        '$set': {'last_accessed': datetime.utcnow()}
+                # Verify file still exists in Telegram
+                if await self._verify_telegram_file(cached_content['telegram_file_id']):
+                    # Update comprehensive access stats
+                    await cache_collection.update_one(
+                        {'_id': cached_content['_id']},
+                        {
+                            '$inc': {'access_count': 1},
+                            '$set': {
+                                'last_accessed': datetime.utcnow(),
+                                'last_verified': datetime.utcnow()
+                            }
+                        }
+                    )
+                    
+                    logger.info(f"✅ Professional cache hit: {youtube_id} ({content_type})")
+                    return {
+                        'telegram_file_id': cached_content['telegram_file_id'],
+                        'title': cached_content['title'],
+                        'duration': cached_content['duration'],
+                        'file_type': cached_content['file_type'],
+                        'quality': cached_content.get('quality'),
+                        'file_size': cached_content.get('file_size', 'Unknown'),
+                        'upload_date': cached_content.get('upload_date'),
+                        'access_count': cached_content.get('access_count', 0) + 1,
+                        'cached': True,
+                        'cache_verified': True
                     }
-                )
-                
-                logger.info(f"Cache hit for {youtube_id} ({content_type})")
-                return {
-                    'telegram_file_id': cached_content['telegram_file_id'],
-                    'title': cached_content['title'],
-                    'duration': cached_content['duration'],
-                    'file_type': cached_content['file_type'],
-                    'quality': cached_content.get('quality'),
-                    'cached': True
-                }
+                else:
+                    # Mark as inactive if file not accessible
+                    await cache_collection.update_one(
+                        {'_id': cached_content['_id']},
+                        {'$set': {'status': 'inactive', 'last_verified': datetime.utcnow()}}
+                    )
+                    logger.warning(f"🔴 Cache entry marked inactive: {youtube_id}")
             
-            logger.info(f"Cache miss for {youtube_id} ({content_type})")
+            logger.info(f"❌ Professional cache miss: {youtube_id} ({content_type})")
             return None
             
         except Exception as e:
-            logger.error(f"Cache check failed: {e}")
+            logger.error(f"Professional cache check failed: {e}")
             return None
     
     async def download_and_cache(self, download_url: str, video_info: Dict[str, Any]) -> Optional[str]:
-        """Download content and upload to Telegram for caching"""
-        try:
-            session = await self.get_session()
-            
-            logger.info(f"Downloading content from: {download_url}")
-            
-            # Stream download to avoid memory issues
-            async with session.stream('GET', download_url) as response:
-                if response.status_code != 200:
-                    raise Exception(f"Download failed with status {response.status_code}")
-                
-                # Create in-memory file
-                file_content = io.BytesIO()
-                total_size = 0
-                
-                async for chunk in response.aiter_bytes(chunk_size=8192):
-                    file_content.write(chunk)
-                    total_size += len(chunk)
-                    
-                    # Limit file size (50MB for Telegram)
-                    if total_size > 50 * 1024 * 1024:
-                        raise Exception("File too large for Telegram (>50MB)")
-                
-                file_content.seek(0)
-                
-                # Determine file extension
+        """Professional download and cache with advanced features"""
+        async with self.upload_semaphore:  # Limit concurrent uploads
+            try:
+                session = await self.get_session()
                 content_type = video_info.get('type', 'video')
                 quality = video_info.get('quality', '360')
-                extension = 'mp3' if content_type == 'audio' else 'mp4'
-                filename = f"{video_info['title'][:50]}.{extension}"
                 
-                # Upload to Telegram
-                logger.info(f"Uploading to Telegram: {filename}")
+                logger.info(f"🚀 Professional download starting: {video_info['title'][:50]}")
                 
-                if content_type == 'audio':
-                    message = await self.bot.send_audio(
-                        chat_id=self.channel_id,
-                        audio=file_content,
-                        title=video_info['title'],
-                        duration=self.parse_duration(video_info.get('duration', '0:00')),
-                        filename=filename
-                    )
-                    telegram_file_id = message.audio.file_id
-                else:
-                    message = await self.bot.send_video(
-                        chat_id=self.channel_id,
-                        video=file_content,
-                        caption=f"{video_info['title']}\nQuality: {quality}p",
-                        filename=filename
-                    )
-                    telegram_file_id = message.video.file_id
+                # Generate unique content hash for deduplication
+                content_hash = self._generate_content_hash(video_info['video_id'], content_type, quality)
                 
-                # Save to cache database
-                cache_entry = ContentCache(
-                    youtube_id=video_info['video_id'],
-                    title=video_info['title'],
-                    duration=video_info['duration'],
-                    telegram_file_id=telegram_file_id,
-                    file_type=content_type,
-                    quality=quality if content_type == 'video' else None
+                # Check for duplicate by hash
+                if await self._check_duplicate_by_hash(content_hash):
+                    logger.info(f"🔄 Duplicate detected by hash, skipping upload")
+                    return None
+                
+                # Professional streaming download with progress tracking
+                file_content, total_size = await self._stream_download_with_progress(
+                    session, download_url, video_info['title']
                 )
                 
-                cache_collection = get_content_cache_collection()
-                await cache_collection.insert_one(cache_entry.to_dict())
+                if not file_content:
+                    return None
                 
-                logger.info(f"Successfully cached content: {telegram_file_id}")
-                return telegram_file_id
+                # Professional upload with retry mechanism
+                telegram_file_id = await self._professional_upload_with_retry(
+                    file_content, video_info, content_type, quality, total_size
+                )
                 
-        except TelegramError as e:
-            logger.error(f"Telegram upload failed: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Download and cache failed: {e}")
-            return None
+                if telegram_file_id:
+                    # Save comprehensive cache entry
+                    await self._save_professional_cache_entry(
+                        video_info, telegram_file_id, content_type, quality, 
+                        total_size, content_hash
+                    )
+                    
+                    logger.info(f"✅ Professional cache complete: {telegram_file_id}")
+                    return telegram_file_id
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"Professional download and cache failed: {e}")
+                return None
     
     async def get_file_stream_url(self, telegram_file_id: str) -> Optional[str]:
         """Get streaming URL from Telegram file"""
@@ -191,32 +208,221 @@ class TelegramCache:
         except:
             return 0
     
-    async def cleanup_old_cache(self, days: int = 30):
-        """Clean up old cached content"""
+    async def _verify_telegram_file(self, telegram_file_id: str) -> bool:
+        """Verify if Telegram file still exists and is accessible"""
         try:
-            from datetime import timedelta
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
-            
+            file_info = await self.bot.get_file(telegram_file_id)
+            return file_info and file_info.file_path
+        except Exception:
+            return False
+    
+    def _generate_content_hash(self, video_id: str, content_type: str, quality: str) -> str:
+        """Generate unique hash for content deduplication"""
+        content_string = f"{video_id}_{content_type}_{quality}"
+        return hashlib.md5(content_string.encode()).hexdigest()
+    
+    async def _check_duplicate_by_hash(self, content_hash: str) -> bool:
+        """Check if content already exists by hash"""
+        try:
             cache_collection = get_content_cache_collection()
-            old_entries = cache_collection.find({
-                'created_at': {'$lt': cutoff_date},
-                'access_count': {'$lt': 10}  # Remove rarely accessed content
+            existing = await cache_collection.find_one({
+                'content_hash': content_hash,
+                'status': 'active'
             })
+            return existing is not None
+        except Exception:
+            return False
+    
+    async def _stream_download_with_progress(self, session, download_url: str, title: str) -> tuple:
+        """Professional streaming download with progress tracking"""
+        try:
+            async with session.stream('GET', download_url) as response:
+                if response.status_code != 200:
+                    raise Exception(f"Download failed with status {response.status_code}")
+                
+                file_content = io.BytesIO()
+                total_size = 0
+                chunk_count = 0
+                
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    file_content.write(chunk)
+                    total_size += len(chunk)
+                    chunk_count += 1
+                    
+                    # Progress logging every 100 chunks (~ 800KB)
+                    if chunk_count % 100 == 0:
+                        size_mb = total_size / (1024 * 1024)
+                        logger.info(f"📥 Downloaded {size_mb:.1f}MB of {title[:30]}...")
+                    
+                    # Professional size limit check
+                    if total_size > self.max_file_size:
+                        raise Exception(f"File too large for Telegram (>{self.max_file_size / (1024*1024):.0f}MB)")
+                
+                file_content.seek(0)
+                size_mb = total_size / (1024 * 1024)
+                logger.info(f"✅ Download complete: {size_mb:.1f}MB")
+                
+                return file_content, total_size
+                
+        except Exception as e:
+            logger.error(f"Stream download failed: {e}")
+            return None, 0
+    
+    async def _professional_upload_with_retry(self, file_content, video_info: Dict, 
+                                            content_type: str, quality: str, file_size: int) -> Optional[str]:
+        """Professional upload with exponential backoff retry"""
+        extension = 'mp3' if content_type == 'audio' else 'mp4'
+        safe_title = self._sanitize_filename(video_info['title'])
+        filename = f"{safe_title[:50]}.{extension}"
+        
+        # Create professional caption
+        caption = self._create_professional_caption(video_info, content_type, quality, file_size)
+        
+        for attempt, delay in enumerate(self.retry_delays, 1):
+            try:
+                logger.info(f"📤 Upload attempt {attempt}/5: {filename}")
+                
+                file_content.seek(0)  # Reset file pointer
+                
+                if content_type == 'audio':
+                    message = await self.bot.send_audio(
+                        chat_id=self.channel_id,
+                        audio=file_content,
+                        title=video_info['title'][:64],  # Telegram title limit
+                        duration=self.parse_duration(video_info.get('duration', '0:00')),
+                        caption=caption,
+                        filename=filename,
+                        parse_mode=ParseMode.HTML
+                    )
+                    telegram_file_id = message.audio.file_id
+                else:
+                    message = await self.bot.send_video(
+                        chat_id=self.channel_id,
+                        video=file_content,
+                        caption=caption,
+                        filename=filename,
+                        parse_mode=ParseMode.HTML
+                    )
+                    telegram_file_id = message.video.file_id
+                
+                logger.info(f"🎯 Professional upload successful: {telegram_file_id}")
+                return telegram_file_id
+                
+            except (RetryAfter, TimedOut, NetworkError) as e:
+                if attempt < len(self.retry_delays):
+                    logger.warning(f"⏳ Upload attempt {attempt} failed, retrying in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"❌ All upload attempts failed: {e}")
+                    return None
+                    
+            except (BadRequest, TelegramError) as e:
+                logger.error(f"❌ Upload failed with non-retryable error: {e}")
+                return None
+                
+        return None
+    
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename for safe upload"""
+        # Remove/replace problematic characters
+        safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_() "
+        return ''.join(c if c in safe_chars else '_' for c in filename)
+    
+    def _create_professional_caption(self, video_info: Dict, content_type: str, 
+                                   quality: str, file_size: int) -> str:
+        """Create professional caption with comprehensive metadata"""
+        size_mb = file_size / (1024 * 1024)
+        
+        caption = f"🎬 <b>{video_info['title'][:100]}</b>\n\n"
+        caption += f"📹 <b>Video ID:</b> <code>{video_info['video_id']}</code>\n"
+        caption += f"🎭 <b>Type:</b> {content_type.upper()}\n"
+        
+        if content_type == 'video' and quality:
+            caption += f"🎯 <b>Quality:</b> {quality}p\n"
+        
+        caption += f"⏱️ <b>Duration:</b> {video_info.get('duration', 'N/A')}\n"
+        caption += f"📊 <b>File Size:</b> {size_mb:.1f}MB\n"
+        caption += f"📅 <b>Upload Date:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n"
+        caption += f"🤖 <b>Cached by YouTube API Server</b>"
+        
+        # Ensure caption doesn't exceed Telegram limit
+        if len(caption) > self.max_caption_length:
+            caption = caption[:self.max_caption_length-3] + "..."
+        
+        return caption
+    
+    async def _save_professional_cache_entry(self, video_info: Dict, telegram_file_id: str,
+                                           content_type: str, quality: str, file_size: int, 
+                                           content_hash: str):
+        """Save comprehensive cache entry with professional metadata"""
+        try:
+            cache_collection = get_content_cache_collection()
             
-            deleted_count = 0
-            async for entry in old_entries:
-                try:
-                    # Note: We can't delete files from Telegram channel easily
-                    # So we just remove the database entry
-                    await cache_collection.delete_one({'_id': entry['_id']})
-                    deleted_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to delete cache entry {entry['_id']}: {e}")
+            cache_entry = {
+                'youtube_id': video_info['video_id'],
+                'title': video_info['title'],
+                'duration': video_info['duration'],
+                'telegram_file_id': telegram_file_id,
+                'file_type': content_type,
+                'quality': quality if content_type == 'video' else None,
+                'file_size': file_size,
+                'content_hash': content_hash,
+                'status': 'active',
+                'upload_date': datetime.utcnow().isoformat(),
+                'created_at': datetime.utcnow(),
+                'last_accessed': datetime.utcnow(),
+                'last_verified': datetime.utcnow(),
+                'access_count': 0,
+                'metadata': {
+                    'source_url': video_info.get('source_url'),
+                    'thumbnail': video_info.get('thumbnail'),
+                    'uploader': video_info.get('uploader', 'YouTube'),
+                    'cache_version': '2.0'
+                }
+            }
             
-            logger.info(f"Cleaned up {deleted_count} old cache entries")
+            await cache_collection.insert_one(cache_entry)
+            logger.info(f"💾 Professional cache entry saved: {video_info['video_id']}")
             
         except Exception as e:
-            logger.error(f"Cache cleanup failed: {e}")
+            logger.error(f"Failed to save professional cache entry: {e}")
+    
+    async def professional_cleanup_cache(self, days: int = 30, max_inactive_days: int = 7):
+        """Professional cache cleanup with comprehensive logic"""
+        try:
+            cache_collection = get_content_cache_collection()
+            
+            # Clean up old inactive entries
+            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            inactive_cutoff = datetime.utcnow() - timedelta(days=max_inactive_days)
+            
+            cleanup_query = {
+                '$or': [
+                    {
+                        'created_at': {'$lt': cutoff_date},
+                        'access_count': {'$lt': 5}  # Rarely accessed
+                    },
+                    {
+                        'status': 'inactive',
+                        'last_verified': {'$lt': inactive_cutoff}
+                    }
+                ]
+            }
+            
+            deleted_count = await cache_collection.delete_many(cleanup_query)
+            
+            # Update statistics
+            total_active = await cache_collection.count_documents({'status': 'active'})
+            total_inactive = await cache_collection.count_documents({'status': 'inactive'})
+            
+            logger.info(f"🧹 Professional cleanup complete:")
+            logger.info(f"   - Removed: {deleted_count.deleted_count} entries")
+            logger.info(f"   - Active: {total_active} entries")
+            logger.info(f"   - Inactive: {total_inactive} entries")
+            
+        except Exception as e:
+            logger.error(f"Professional cache cleanup failed: {e}")
 
 # Global cache instance
 telegram_cache = TelegramCache()
