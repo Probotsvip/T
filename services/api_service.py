@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from database.mongo import (
     get_api_keys_collection, get_usage_stats_collection, 
-    get_concurrent_users_collection
+    get_concurrent_users_collection, get_content_cache_collection
 )
 from models import UsageStats, ConcurrentUser
 from services.youtube_downloader import YouTubeDownloader
 from services.telegram_cache import telegram_cache
+from config import TELEGRAM_CHANNEL_ID
 from utils.logging import LOGGER
 
 logger = LOGGER(__name__)
@@ -136,40 +137,65 @@ class APIService:
     
     async def process_youtube_request(self, api_key: str, youtube_url: str, 
                                     content_type: str = 'video', quality: str = '360') -> Dict[str, Any]:
-        """Process YouTube content request with caching"""
+        """Process YouTube content request with CACHE-FIRST priority"""
         start_time = datetime.utcnow()
         
         try:
             # Extract video ID
             video_id = self.youtube_downloader.extract_video_id(youtube_url)
+            logger.info(f"🔍 Processing request for video ID: {video_id}")
             
-            # Check cache first (prevent duplicates)
+            # 🚀 STEP 1: Check Telegram cache FIRST (highest priority)
+            logger.info(f"📱 Checking Telegram cache for {video_id}...")
             cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
             
-            # Also check MongoDB for existing Telegram file
-            existing_cache = await self._check_existing_telegram_cache(video_id, content_type)
-            
-            if cached_content or existing_cache:
-                cache_data = cached_content or existing_cache
+            if cached_content:
+                logger.info(f"✅ CACHE HIT! Found in Telegram: {cached_content['title']}")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
-                await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'cache_hit')
+                await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'telegram_cache_hit')
                 
                 return {
                     'status': True,
                     'cached': True,
+                    'source': 'telegram_cache',
                     'video_id': video_id,
-                    'title': cache_data['title'],
-                    'duration': cache_data['duration'],
-                    'telegram_file_id': cache_data['telegram_file_id'],
+                    'title': cached_content['title'],
+                    'duration': cached_content['duration'],
+                    'telegram_file_id': cached_content['telegram_file_id'],
                     'file_type': content_type,
-                    'quality': cache_data.get('quality', quality),
-                    'file_size': cache_data.get('file_size', 'Unknown'),
-                    'upload_date': cache_data.get('upload_date', 'Unknown'),
-                    'stream_url': f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{cache_data['telegram_file_id']}"
+                    'quality': cached_content.get('quality', quality),
+                    'file_size': cached_content.get('file_size', 'Unknown'),
+                    'upload_date': cached_content.get('upload_date', 'Unknown'),
+                    'stream_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
                 }
             
-            # Not in cache, download from YouTube with high quality
-            logger.info(f"Downloading from YouTube: {video_id}")
+            # 🚀 STEP 2: Check MongoDB backup cache (second priority)
+            logger.info(f"🗄️ Checking MongoDB backup cache...")
+            existing_cache = await self._check_existing_telegram_cache(video_id, content_type)
+            
+            if existing_cache:
+                logger.info(f"✅ BACKUP CACHE HIT! Found in MongoDB: {existing_cache['title']}")
+                response_time = (datetime.utcnow() - start_time).total_seconds()
+                await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'mongodb_cache_hit')
+                
+                return {
+                    'status': True,
+                    'cached': True,
+                    'source': 'mongodb_backup',
+                    'video_id': video_id,
+                    'title': existing_cache['title'],
+                    'duration': existing_cache['duration'],
+                    'telegram_file_id': existing_cache['telegram_file_id'],
+                    'file_type': content_type,
+                    'quality': existing_cache.get('quality', quality),
+                    'file_size': existing_cache.get('file_size', 'Unknown'),
+                    'upload_date': existing_cache.get('upload_date', 'Unknown'),
+                    'stream_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
+                }
+            
+            # 🚀 STEP 3: Cache miss - hit external API (last resort)
+            logger.info(f"❌ CACHE MISS! Downloading from external API: {video_id}")
+            logger.info(f"🌐 Hitting SaveTube CDN for fresh content...")
             
             # Always use highest quality available
             best_quality = await self._get_best_quality(youtube_url, content_type)
