@@ -19,6 +19,5 @@ dependencies = [
     "python-telegram-bot==21.3",
     "redis>=6.3.0",
     "sqlalchemy>=2.0.42",
-    "telegram>=0.0.1",
     "werkzeug>=3.1.3",
 ]

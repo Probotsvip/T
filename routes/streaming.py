@@ -2,7 +2,7 @@ from flask import Blueprint, request, Response, session, jsonify
 import asyncio
 import uuid
 from services.api_service import api_service
-from services.telegram_cache import telegram_cache
+from simple_telegram import telegram_cache
 from utils.logging import LOGGER
 
 logger = LOGGER(__name__)

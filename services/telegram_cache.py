@@ -5,12 +5,12 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, BinaryIO, List
 import httpx
-from telegram import Bot, InputFile
+from telegram import Bot
 from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter
 from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
-from database.mongo import get_content_cache_collection
-from models import ContentCache
+from database.simple_mongo import get_content_cache_collection
+from models_simple import ContentCache
 from utils.logging import LOGGER
 
 logger = LOGGER(__name__)
@@ -49,7 +49,7 @@ class TelegramCache:
             await self.session.aclose()
             self.session = None
     
-    async def check_cache(self, youtube_id: str, content_type: str, quality: str = None) -> Optional[Dict[str, Any]]:
+    async def check_cache(self, youtube_id: str, content_type: str, quality: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Professional cache checking with comprehensive metadata"""
         try:
             cache_collection = get_content_cache_collection()

@@ -3,13 +3,13 @@ import io
 import httpx
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
-from database.mongo import (
+from database.simple_mongo import (
     get_api_keys_collection, get_usage_stats_collection, 
     get_concurrent_users_collection, get_content_cache_collection
 )
-from models import UsageStats, ConcurrentUser
+from models_simple import UsageStats, ConcurrentUser
 from services.youtube_downloader import YouTubeDownloader
-from services.telegram_cache import telegram_cache
+from simple_telegram import telegram_cache
 from config import TELEGRAM_CHANNEL_ID
 from utils.logging import LOGGER
 

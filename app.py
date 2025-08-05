@@ -4,7 +4,7 @@ import logging
 from flask import Flask, render_template, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config import SECRET_KEY, DEBUG
-from database.mongo import init_professional_db
+from database.simple_mongo import init_db
 from routes.api import api_bp
 from routes.admin import admin_bp
 from routes.streaming import streaming_bp
@@ -138,13 +138,13 @@ def initialize_app():
     try:
         logger.info("Initializing YouTube API Server...")
         
-        # Initialize Professional MongoDB connection using async
+        # Initialize MongoDB connection
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(init_professional_db())
+            loop.run_until_complete(init_db())
             loop.close()
-            logger.info("🚀 Professional database connected successfully")
+            logger.info("MongoDB connected successfully")
         except Exception as db_error:
             logger.warning(f"Database initialization failed: {db_error}")
             logger.info("Continuing with limited functionality")

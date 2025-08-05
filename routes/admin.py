@@ -5,14 +5,14 @@ from datetime import datetime, timedelta
 import uuid
 import time
 from typing import Dict, Any, Optional
-from database.mongo import (
+from database.simple_mongo import (
     get_users_collection, get_api_keys_collection, 
     get_usage_stats_collection, get_concurrent_users_collection,
-    get_content_cache_collection, mongodb
+    get_content_cache_collection
 )
-from models import User, APIKey
+from models_simple import User, APIKey
 from services.api_service import api_service
-from services.telegram_cache import telegram_cache
+from simple_telegram import telegram_cache
 from config import ADMIN_USERNAME, ADMIN_PASSWORD
 from utils.logging import LOGGER
 
@@ -504,7 +504,7 @@ def api_stats():
 def cleanup_cache():
     """Cleanup old cache entries"""
     try:
-        from services.telegram_cache import telegram_cache
+        # Use the already imported telegram_cache
         days = int(request.form.get('days', 30))
         
         run_async(telegram_cache.cleanup_old_cache(days))
