@@ -143,10 +143,14 @@ class APIService:
             # Extract video ID
             video_id = self.youtube_downloader.extract_video_id(youtube_url)
             
-            # Check cache first
+            # Check cache first (prevent duplicates)
             cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
             
-            if cached_content:
+            # Also check MongoDB for existing Telegram file
+            existing_cache = await self._check_existing_telegram_cache(video_id, content_type)
+            
+            if cached_content or existing_cache:
+                cache_data = cached_content or existing_cache
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'cache_hit')
                 
@@ -154,18 +158,24 @@ class APIService:
                     'status': True,
                     'cached': True,
                     'video_id': video_id,
-                    'title': cached_content['title'],
-                    'duration': cached_content['duration'],
-                    'telegram_file_id': cached_content['telegram_file_id'],
+                    'title': cache_data['title'],
+                    'duration': cache_data['duration'],
+                    'telegram_file_id': cache_data['telegram_file_id'],
                     'file_type': content_type,
-                    'quality': quality if content_type == 'video' else None,
-                    'stream_url': await telegram_cache.get_file_stream_url(cached_content['telegram_file_id'])
+                    'quality': cache_data.get('quality', quality),
+                    'file_size': cache_data.get('file_size', 'Unknown'),
+                    'upload_date': cache_data.get('upload_date', 'Unknown'),
+                    'stream_url': f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{cache_data['telegram_file_id']}"
                 }
             
-            # Not in cache, download from YouTube
+            # Not in cache, download from YouTube with high quality
             logger.info(f"Downloading from YouTube: {video_id}")
+            
+            # Always use highest quality available
+            best_quality = await self._get_best_quality(youtube_url, content_type)
+            
             download_result = await self.youtube_downloader.download_content(
-                youtube_url, quality, content_type
+                youtube_url, best_quality, content_type
             )
             
             if not download_result['status']:
@@ -207,6 +217,80 @@ class APIService:
                 'error': str(e)
             }
     
+    async def _check_existing_telegram_cache(self, video_id: str, content_type: str) -> Dict[str, Any]:
+        """Check MongoDB for existing Telegram cached content to prevent duplicates"""
+        try:
+            content_cache_collection = get_content_cache_collection()
+            
+            existing = await content_cache_collection.find_one({
+                'video_id': video_id,
+                'content_type': content_type,
+                'telegram_file_id': {'$exists': True}
+            })
+            
+            if existing:
+                logger.info(f"🔄 Found existing Telegram cache for {video_id} ({content_type})")
+                return {
+                    'title': existing['title'],
+                    'duration': existing['duration'],
+                    'telegram_file_id': existing['telegram_file_id'],
+                    'quality': existing.get('quality'),
+                    'file_size': existing.get('file_size'),
+                    'upload_date': existing.get('upload_date')
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking existing cache: {e}")
+            return None
+    
+    async def _get_best_quality(self, youtube_url: str, content_type: str) -> str:
+        """Get the best quality available for content"""
+        try:
+            # For videos: Try 1080p > 720p > 480p > 360p
+            if content_type == 'video':
+                quality_priorities = ['1080', '720', '480', '360']
+            else:
+                # For audio: Always highest quality
+                quality_priorities = ['320', '256', '192', '128']
+            
+            # Return highest quality (simplified for now)
+            return quality_priorities[0]
+            
+        except Exception as e:
+            logger.error(f"Error getting best quality: {e}")
+            return '720' if content_type == 'video' else '320'
+    
+    async def _save_telegram_cache(self, video_id: str, content_type: str, cache_data: Dict[str, Any]):
+        """Save Telegram cache data to MongoDB to prevent duplicates"""
+        try:
+            content_cache_collection = get_content_cache_collection()
+            
+            cache_document = {
+                'video_id': video_id,
+                'content_type': content_type,
+                'title': cache_data['title'],
+                'duration': cache_data['duration'],
+                'telegram_file_id': cache_data['telegram_file_id'],
+                'quality': cache_data.get('quality'),
+                'file_size': cache_data.get('file_size'),
+                'upload_date': datetime.utcnow().isoformat(),
+                'created_at': datetime.utcnow()
+            }
+            
+            # Upsert to prevent duplicates
+            await content_cache_collection.update_one(
+                {'video_id': video_id, 'content_type': content_type},
+                {'$set': cache_document},
+                upsert=True
+            )
+            
+            logger.info(f"✅ Saved Telegram cache for {video_id} ({content_type})")
+            
+        except Exception as e:
+            logger.error(f"Error saving Telegram cache: {e}")
+
     async def _cache_content_background(self, download_result: Dict[str, Any]):
         """Background task - Download file and upload to Telegram"""
         try:
@@ -262,31 +346,63 @@ class APIService:
                 
                 bot = Bot(token=TELEGRAM_BOT_TOKEN)
                 
-                # Determine file type and upload
+                # Enhanced file upload with complete metadata
                 content_type = download_result.get('type', 'video')
-                quality = download_result.get('quality', '360')
+                quality = download_result.get('quality', 'HD')
                 extension = 'mp3' if content_type == 'audio' else 'mp4'
-                filename = f"{title[:50]}.{extension}"
+                clean_title = title.replace("/", "_").replace("\\", "_")[:50]
+                filename = f"{clean_title}_{quality}.{extension}"
+                
+                # Create detailed caption with all metadata
+                upload_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                file_size_mb = f"{total_size/1024/1024:.1f}MB"
+                
+                caption = (
+                    f"🎬 {title}\n\n"
+                    f"📹 Video ID: {video_id}\n"
+                    f"🎭 Type: {content_type.upper()}\n"
+                    f"🎯 Quality: {quality}p\n"
+                    f"⏱️ Duration: {download_result.get('duration', 'Unknown')}\n"
+                    f"📊 File Size: {file_size_mb}\n"
+                    f"📅 Upload Date: {upload_date}\n"
+                    f"🤖 Cached by YouTube API Server"
+                )
                 
                 if content_type == 'audio':
                     message = await bot.send_audio(
                         chat_id=TELEGRAM_CHANNEL_ID,
                         audio=file_content,
-                        title=title,
                         filename=filename,
-                        caption=f"🎵 {title}\nVideo ID: {video_id}"
+                        caption=caption[:1024],  # Telegram caption limit
+                        title=clean_title,
+                        duration=int(float(download_result.get('duration', '0').split()[0]) * 60) if 'min' in download_result.get('duration', '') else None
                     )
                     telegram_file_id = message.audio.file_id
                 else:
                     message = await bot.send_video(
                         chat_id=TELEGRAM_CHANNEL_ID,
                         video=file_content,
-                        caption=f"🎬 {title}\nQuality: {quality}p\nVideo ID: {video_id}",
-                        filename=filename
+                        filename=filename,
+                        caption=caption[:1024],  # Telegram caption limit
+                        supports_streaming=True,
+                        duration=int(float(download_result.get('duration', '0').split()[0]) * 60) if 'min' in download_result.get('duration', '') else None,
+                        width=1280 if quality in ['720', '1080'] else 854,
+                        height=720 if quality in ['720', '1080'] else 480
                     )
                     telegram_file_id = message.video.file_id
                 
                 logger.info(f"✅ Background: Successfully uploaded to Telegram! File ID: {telegram_file_id}")
+                print(f"✅ Background: Successfully uploaded to Telegram! File ID: {telegram_file_id}")
+                
+                # Save to MongoDB to prevent future duplicates
+                cache_data = {
+                    'title': title,
+                    'duration': download_result.get('duration'),
+                    'telegram_file_id': telegram_file_id,
+                    'quality': quality,
+                    'file_size': file_size_mb
+                }
+                await self._save_telegram_cache(video_id, content_type, cache_data)
                 
         except Exception as e:
             logger.error(f"❌ Background caching error: {e}")

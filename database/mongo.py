@@ -62,3 +62,6 @@ def get_usage_stats_collection():
 
 def get_concurrent_users_collection():
     return mongodb.db.concurrent_users
+
+def get_content_cache_collection():
+    return mongodb.db.content_cache
