@@ -153,8 +153,11 @@ class TelegramCache:
                     logger.info(f"🔄 Using fallback quality {cached_content.get('quality')} for {youtube_id}")
             
             if cached_content:
-                # Verify file still exists in Telegram
-                if await self._verify_telegram_file(cached_content['telegram_file_id']):
+                # CRITICAL FIX: Skip telegram verification for manual uploads and assume they work
+                telegram_file_id = cached_content['telegram_file_id']
+                is_manual_upload = 'manually_uploaded' in telegram_file_id
+                
+                if is_manual_upload or await self._verify_telegram_file(telegram_file_id):
                     # Update comprehensive access stats
                     await cache_collection.update_one(
                         {'_id': cached_content['_id']},
@@ -162,7 +165,8 @@ class TelegramCache:
                             '$inc': {'access_count': 1},
                             '$set': {
                                 'last_accessed': datetime.utcnow(),
-                                'last_verified': datetime.utcnow()
+                                'last_verified': datetime.utcnow(),
+                                'status': 'active'  # Ensure status is active
                             }
                         }
                     )

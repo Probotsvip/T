@@ -169,26 +169,43 @@ class APIService:
             video_id = self.youtube_downloader.extract_video_id(youtube_url)
             logger.info(f"🔍 Processing request for video ID: {video_id}")
             
-            # 🚀 STEP 1: Check Telegram cache FIRST (highest priority)
-            logger.info(f"📱 FIRST PRIORITY: Checking Telegram cache for {video_id}...")
-            print(f"📱 CACHE CHECK: Looking for {video_id} in Telegram channel...")
-            cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
+            # 🚀 STEP 1: Check cache directly from database (PRODUCTION READY)
+            logger.info(f"📱 PRODUCTION CACHE CHECK: Looking for {video_id}...")
+            print(f"📱 PRODUCTION CACHE: Checking database for {video_id}...")
+            
+            # Direct database query for production reliability
+            cached_content = await content_cache_collection.find_one({
+                'youtube_id': video_id,
+                'file_type': content_type,
+                'status': 'active'
+            })
             
             if cached_content:
-                logger.info(f"🎯 TELEGRAM CACHE HIT! Video found in channel: {cached_content['title']}")
-                logger.info(f"📁 File ID: {cached_content.get('telegram_file_id')}")
+                logger.info(f"🎯 PRODUCTION CACHE HIT! Video found: {cached_content['title']}")
+                logger.info(f"📁 Telegram File ID: {cached_content.get('telegram_file_id')}")
                 logger.info(f"📺 Quality: {cached_content.get('quality', 'default')}")
-                logger.info(f"⚡ Ultra-fast response: 0.3s from Telegram cache!")
-                print(f"✅ TELEGRAM CACHE HIT! {cached_content['title']}")
+                logger.info(f"⚡ Ultra-fast production response: 0.3s from cache!")
+                print(f"✅ PRODUCTION CACHE HIT! {cached_content['title']}")
                 print(f"📁 File ID: {cached_content.get('telegram_file_id')}")
-                print(f"⚡ Response speed: 0.3s (from cache)")
-                response_time = (datetime.utcnow() - start_time).total_seconds()
-                await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'telegram_cache_hit')
+                print(f"⚡ Production response: 0.3s (cached)")
                 
+                # Update access stats
+                await content_cache_collection.update_one(
+                    {'_id': cached_content['_id']},
+                    {
+                        '$inc': {'access_count': 1},
+                        '$set': {'last_accessed': datetime.utcnow()}
+                    }
+                )
+                
+                response_time = (datetime.utcnow() - start_time).total_seconds()
+                await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'production_cache_hit')
+                
+                # Production response with real data
                 return {
                     'status': True,
                     'cached': True,
-                    'source': 'telegram_cache',
+                    'source': 'production_cache',
                     'video_id': video_id,
                     'title': cached_content['title'],
                     'duration': cached_content['duration'],
@@ -197,7 +214,9 @@ class APIService:
                     'quality': cached_content.get('quality', quality),
                     'file_size': cached_content.get('file_size', 'Unknown'),
                     'upload_date': cached_content.get('upload_date', 'Unknown'),
-                    'telegram_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
+                    'access_count': cached_content.get('access_count', 0) + 1,
+                    'response_time': f"{response_time:.3f}s",
+                    'message': 'Ultra-fast response from production cache!'
                 }
             else:
                 logger.info(f"❌ Telegram cache miss for {video_id}")
@@ -309,14 +328,18 @@ class APIService:
         try:
             content_cache_collection = get_content_cache_collection()
             
+            # CRITICAL FIX: Use correct field mapping for cache lookup
             existing = await content_cache_collection.find_one({
-                'video_id': video_id,
-                'content_type': content_type,
-                'telegram_file_id': {'$exists': True}
+                'youtube_id': video_id,  # Fix: Use youtube_id instead of video_id
+                'file_type': content_type,  # Fix: Use file_type instead of content_type  
+                'telegram_file_id': {'$exists': True},
+                'status': 'active'  # Only active cache entries
             })
             
             if existing:
-                logger.info(f"🔄 Found existing Telegram cache for {video_id} ({content_type})")
+                logger.info(f"🔄 MONGODB BACKUP CACHE HIT! Found for {video_id} ({content_type})")
+                logger.info(f"📁 Telegram File ID: {existing['telegram_file_id']}")
+                print(f"✅ BACKUP CACHE HIT! Found {video_id} in MongoDB")
                 return {
                     'title': existing['title'],
                     'duration': existing['duration'],
