@@ -3,7 +3,7 @@
 Rate limiting service with daily request resets at midnight
 """
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, Dict, Any
 from pymongo import MongoClient
 import logging
@@ -60,7 +60,7 @@ class RateLimiter:
             # Check if limit exceeded
             if daily_requests >= daily_limit:
                 client.close()
-                next_reset = datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + datetime.timedelta(days=1)
+                next_reset = datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + timedelta(days=1)
                 return {
                     'allowed': False,
                     'daily_requests': daily_requests,
@@ -90,7 +90,7 @@ class RateLimiter:
             client.close()
             
             if update_result.modified_count > 0:
-                next_reset = datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + datetime.timedelta(days=1)
+                next_reset = datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + timedelta(days=1)
                 remaining = max(0, daily_limit - new_daily_requests)
                 
                 logger.info(f"API key {api_key[:10]}... used: {new_daily_requests}/{daily_limit}, remaining: {remaining}")
@@ -108,7 +108,7 @@ class RateLimiter:
                     'daily_requests': daily_requests,
                     'daily_limit': daily_limit,
                     'remaining': max(0, daily_limit - daily_requests),
-                    'reset_at': datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + datetime.timedelta(days=1),
+                    'reset_at': datetime.combine(current_date, datetime.min.time()).replace(hour=0, minute=0, second=0) + timedelta(days=1),
                     'error': 'Failed to update request count'
                 }
                 
@@ -149,7 +149,7 @@ class RateLimiter:
                 'is_active': key_data.get('is_active', True),
                 'created_at': key_data.get('created_at'),
                 'last_request_time': key_data.get('last_request_time'),
-                'reset_at': datetime.combine(datetime.utcnow().date(), datetime.min.time()).replace(hour=0, minute=0, second=0) + datetime.timedelta(days=1)
+                'reset_at': datetime.combine(datetime.utcnow().date(), datetime.min.time()).replace(hour=0, minute=0, second=0) + timedelta(days=1)
             }
             
         except Exception as e:
