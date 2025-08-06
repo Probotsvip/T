@@ -64,7 +64,7 @@ class ProfessionalAdminService:
     
     async def _get_usage_analytics(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
         """Get detailed usage analytics"""
-        usage_collection = await get_usage_stats_collection()
+        usage_collection = get_usage_stats_collection()
         
         # Query for usage data in time range
         usage_query = {
@@ -87,16 +87,18 @@ class ProfessionalAdminService:
         ]
         
         usage_data = []
-        async for doc in usage_collection.aggregate(pipeline):
-            usage_data.append({
-                'endpoint': doc['_id'],
-                'requests': doc['count'],
-                'unique_users': len(doc['unique_ips']),
-                'avg_response_time': round(doc.get('avg_response_time', 0), 2)
-            })
-        
-        # Get total requests
-        total_requests = await usage_collection.count_documents(usage_query)
+        total_requests = 0
+        if usage_collection is not None:
+            async for doc in usage_collection.aggregate(pipeline):
+                usage_data.append({
+                    'endpoint': doc['_id'],
+                    'requests': doc['count'],
+                    'unique_users': len(doc['unique_ips']),
+                    'avg_response_time': round(doc.get('avg_response_time', 0), 2)
+                })
+            
+            # Get total requests
+            total_requests = await usage_collection.count_documents(usage_query)
         
         return {
             'total_requests': total_requests,
@@ -107,7 +109,7 @@ class ProfessionalAdminService:
     
     async def _get_cache_analytics(self) -> Dict[str, Any]:
         """Get comprehensive cache analytics"""
-        cache_collection = await get_content_cache_collection()
+        cache_collection = get_content_cache_collection()
         
         # Cache statistics pipeline
         pipeline = [
@@ -122,6 +124,17 @@ class ProfessionalAdminService:
         cache_stats = {}
         total_cached = 0
         total_size = 0
+        
+        if cache_collection is not None:
+            async for doc in cache_collection.aggregate(pipeline):
+                status = doc['_id'] or 'unknown'
+                cache_stats[status] = {
+                    'count': doc['count'],
+                    'total_size_mb': round(doc.get('total_size', 0) / (1024*1024), 2),
+                    'avg_access_count': round(doc.get('avg_access_count', 0), 1)
+                }
+                total_cached += doc['count']
+                total_size += doc.get('total_size', 0)
         
         async for doc in cache_collection.aggregate(pipeline):
             status = doc['_id']
@@ -182,33 +195,38 @@ class ProfessionalAdminService:
     
     async def _get_api_key_stats(self) -> Dict[str, Any]:
         """Get API key statistics"""
-        api_keys_collection = await get_api_keys_collection()
+        api_keys_collection = get_api_keys_collection()
         
         # Count active vs inactive keys
-        active_keys = await api_keys_collection.count_documents({'active': True})
-        inactive_keys = await api_keys_collection.count_documents({'active': False})
+        if api_keys_collection is not None:
+            active_keys = await api_keys_collection.count_documents({'is_active': True})
+            inactive_keys = await api_keys_collection.count_documents({'is_active': False})
+        else:
+            active_keys = 0
+            inactive_keys = 0
         
         # Get usage distribution
-        pipeline = [
-            {'$match': {'active': True}},
-            {'$sort': {'usage_count': -1}},
-            {'$limit': 10},
-            {'$project': {
-                'key': {'$substr': ['$key', 0, 8]},
-                'usage_count': 1,
-                'rate_limit': 1,
-                'created_at': 1
-            }}
-        ]
-        
         top_keys = []
-        async for doc in api_keys_collection.aggregate(pipeline):
-            top_keys.append({
-                'key_preview': doc['key'] + '...',
-                'usage_count': doc.get('usage_count', 0),
-                'rate_limit': doc.get('rate_limit', 1000),
-                'created_at': doc.get('created_at', '')
-            })
+        if api_keys_collection is not None:
+            pipeline = [
+                {'$match': {'is_active': True}},
+                {'$sort': {'usage_count': -1}},
+                {'$limit': 10},
+                {'$project': {
+                    'key': {'$substr': ['$key', 0, 8]},
+                    'usage_count': 1,
+                    'rate_limit': 1,
+                    'created_at': 1
+                }}
+            ]
+            
+            async for doc in api_keys_collection.aggregate(pipeline):
+                top_keys.append({
+                    'key_preview': doc['key'] + '...',
+                    'usage_count': doc.get('usage_count', 0),
+                    'rate_limit': doc.get('rate_limit', 1000),
+                    'created_at': doc.get('created_at', '')
+                })
         
         return {
             'active_keys': active_keys,
@@ -219,31 +237,35 @@ class ProfessionalAdminService:
     
     async def _get_concurrent_user_analytics(self) -> Dict[str, Any]:
         """Get concurrent user analytics"""
-        concurrent_collection = await get_concurrent_users_collection()
+        concurrent_collection = get_concurrent_users_collection()
         
         # Current active users (last 5 minutes)
         five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
-        active_users = await concurrent_collection.count_documents({
-            'last_activity': {'$gte': five_minutes_ago}
-        })
+        if concurrent_collection is not None:
+            active_users = await concurrent_collection.count_documents({
+                'last_activity': {'$gte': five_minutes_ago}
+            })
+        else:
+            active_users = 0
         
         # Peak users in last 24 hours
-        pipeline = [
-            {'$group': {
-                '_id': {
-                    'hour': {'$hour': '$last_activity'},
-                    'date': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$last_activity'}}
-                },
-                'count': {'$sum': 1}
-            }},
-            {'$sort': {'count': -1}},
-            {'$limit': 1}
-        ]
-        
         peak_users = 0
-        async for doc in concurrent_collection.aggregate(pipeline):
-            peak_users = doc['count']
-            break
+        if concurrent_collection is not None:
+            pipeline = [
+                {'$group': {
+                    '_id': {
+                        'hour': {'$hour': '$last_activity'},
+                        'date': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$last_activity'}}
+                    },
+                    'count': {'$sum': 1}
+                }},
+                {'$sort': {'count': -1}},
+                {'$limit': 1}
+            ]
+            
+            async for doc in concurrent_collection.aggregate(pipeline):
+                peak_users = doc['count']
+                break
         
         return {
             'current_active_users': active_users,
