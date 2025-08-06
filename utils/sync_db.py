@@ -312,6 +312,27 @@ class YouTubeAPIDatabase:
         except Exception as e:
             logger.error(f"Error deleting API key: {e}")
             return False
+    
+    def delete_api_key(self, key_id: str) -> bool:
+        """Delete API key by ID"""
+        try:
+            client, db = self.get_database_connection()
+            if not db:
+                return False
+            
+            result = db.api_keys.delete_one({'_id': key_id})
+            client.close()
+            
+            if result.deleted_count > 0:
+                logger.info(f"✅ API key deleted: {key_id}")
+                return True
+            else:
+                logger.warning(f"❌ API key not found: {key_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Delete API key error: {e}")
+            return False
 
 # Global database instance
 youtube_api_db = YouTubeAPIDatabase()
