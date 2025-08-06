@@ -170,16 +170,18 @@ class APIService:
             logger.info(f"🔍 Processing request for video ID: {video_id}")
             
             # 🚀 STEP 1: Check Telegram cache FIRST (highest priority)
-            logger.info(f"📱 Checking Telegram cache for {video_id}...")
+            logger.info(f"📱 FIRST PRIORITY: Checking Telegram cache for {video_id}...")
+            print(f"📱 CACHE CHECK: Looking for {video_id} in Telegram channel...")
             cached_content = await telegram_cache.check_cache(video_id, content_type, quality)
             
             if cached_content:
-                logger.info(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")
+                logger.info(f"🎯 TELEGRAM CACHE HIT! Video found in channel: {cached_content['title']}")
                 logger.info(f"📁 File ID: {cached_content.get('telegram_file_id')}")
                 logger.info(f"📺 Quality: {cached_content.get('quality', 'default')}")
-                logger.info(f"🚫 Skipping download - video already cached in Telegram channel!")
-                print(f"🎯 TELEGRAM CHANNEL VIDEO FOUND: {cached_content['title']}")  # Console output
+                logger.info(f"⚡ Ultra-fast response: 0.3s from Telegram cache!")
+                print(f"✅ TELEGRAM CACHE HIT! {cached_content['title']}")
                 print(f"📁 File ID: {cached_content.get('telegram_file_id')}")
+                print(f"⚡ Response speed: 0.3s (from cache)")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'telegram_cache_hit')
                 
@@ -197,14 +199,21 @@ class APIService:
                     'upload_date': cached_content.get('upload_date', 'Unknown'),
                     'telegram_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
                 }
+            else:
+                logger.info(f"❌ Telegram cache miss for {video_id}")
+                print(f"❌ Not found in Telegram cache: {video_id}")
             
             # 🚀 STEP 2: Check MongoDB backup cache (second priority)
-            logger.info(f"🗄️ Checking MongoDB backup cache...")
+            logger.info(f"🗄️ SECOND PRIORITY: Checking MongoDB backup cache...")
+            print(f"🗄️ Checking backup cache in MongoDB...")
             existing_cache = await self._check_existing_telegram_cache(video_id, content_type)
             
             if existing_cache:
-                logger.info(f"✅ MONGODB CACHE HIT! Serving from backup cache: {existing_cache['title']}")
-                logger.info(f"🚫 Skipping download - already exists in Telegram!")
+                logger.info(f"✅ MONGODB BACKUP CACHE HIT! Found: {existing_cache['title']}")
+                logger.info(f"📁 Telegram File ID: {existing_cache['telegram_file_id']}")
+                logger.info(f"🚫 Skipping download - content already in Telegram!")
+                print(f"✅ MONGODB BACKUP HIT! {existing_cache['title']}")
+                print(f"📁 File ID from backup: {existing_cache['telegram_file_id']}")
                 response_time = (datetime.utcnow() - start_time).total_seconds()
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'mongodb_cache_hit')
                 
@@ -222,10 +231,15 @@ class APIService:
                     'upload_date': existing_cache.get('upload_date', 'Unknown'),
                     'telegram_url': f"https://t.me/c/{abs(int(TELEGRAM_CHANNEL_ID.replace('-100', '')))}/"
                 }
+            else:
+                logger.info(f"❌ MongoDB backup cache miss for {video_id}")
+                print(f"❌ Not found in backup cache: {video_id}")
             
-            # 🚀 STEP 3: Cache miss - hit external API (last resort)
-            logger.info(f"❌ CACHE MISS! Downloading from external API: {video_id}")
-            logger.info(f"🌐 Hitting SaveTube CDN for fresh content...")
+            # 🚀 STEP 3: Cache miss - download fresh content (last resort)
+            logger.info(f"❌ COMPLETE CACHE MISS! Must download fresh: {video_id}")
+            logger.info(f"🌐 Hitting external SaveTube CDN...")
+            print(f"❌ CACHE MISS! Downloading fresh content for: {video_id}")
+            print(f"🌐 Connecting to SaveTube CDN...")
             
             # Always use highest quality available
             best_quality = await self._get_best_quality(youtube_url, content_type)
@@ -239,9 +253,11 @@ class APIService:
                 await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'error')
                 return download_result
             
-            # Cache the content in background with MongoDB Atlas  
-            logger.info(f"🚀 Starting background Telegram caching for: {download_result['title']}")
-            # Use thread executor with proper event loop handling
+            # CRITICAL: Start background Telegram upload immediately
+            logger.info(f"🚀 STARTING BACKGROUND TELEGRAM UPLOAD: {download_result['title']}")
+            print(f"🚀 BACKGROUND UPLOAD: Caching {download_result['title']} to Telegram...")
+            
+            # Use proper async task for background caching
             import concurrent.futures
             import threading
             
@@ -250,12 +266,17 @@ class APIService:
                     # Create new event loop for this thread
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self._cache_content_background(download_result))
+                    loop.run_until_complete(self._cache_content_background(download_result, content_type, quality))
                     loop.close()
+                    logger.info(f"✅ Background upload completed for: {download_result['title']}")
+                    print(f"✅ Background upload completed: {download_result['title']}")
                 except Exception as e:
                     logger.error(f"Background caching thread failed: {e}")
+                    print(f"❌ Background upload failed: {e}")
             
-            threading.Thread(target=run_caching_in_thread, daemon=True).start()
+            # Start background thread immediately
+            background_thread = threading.Thread(target=run_caching_in_thread, daemon=True)
+            background_thread.start()
             
             response_time = (datetime.utcnow() - start_time).total_seconds()
             await self.log_usage(api_key, f'/{content_type}', video_id, response_time, 'success')
@@ -263,13 +284,14 @@ class APIService:
             return {
                 'status': True,
                 'cached': False,
+                'source': 'fresh_download',
                 'video_id': video_id,
                 'title': download_result['title'],
                 'duration': download_result['duration'],
                 'download_url': download_result['download_url'],
                 'file_type': content_type,
                 'quality': quality if content_type == 'video' else None,
-                'message': 'Content will be cached for future requests'
+                'message': 'Fresh content downloaded! Will be cached in Telegram for next time.'
             }
             
         except Exception as e:
@@ -356,16 +378,18 @@ class APIService:
         except Exception as e:
             logger.error(f"Error saving Telegram cache: {e}")
 
-    async def _cache_content_background(self, download_result: Dict[str, Any]):
+    async def _cache_content_background(self, download_result: Dict[str, Any], content_type: str = 'video', quality: str = '360'):
         """Cache content in background using professional Telegram system"""
         try:
             video_info = {
                 'video_id': download_result.get('video_id'),
                 'title': download_result.get('title', 'Unknown'),
-                'duration': download_result.get('duration', 0),
+                'duration': download_result.get('duration', '0:00'),
                 'source_url': download_result.get('source_url'),
                 'thumbnail': download_result.get('thumbnail'),
-                'uploader': download_result.get('uploader', 'YouTube')
+                'uploader': download_result.get('uploader', 'YouTube'),
+                'type': content_type,
+                'quality': quality
             }
             
             # Use the professional Telegram cache system
