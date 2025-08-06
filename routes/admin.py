@@ -379,11 +379,11 @@ def dashboard():
 def api_keys():
     """Manage API keys"""
     try:
-        from utils.sync_db import sync_db
+        from utils.sync_db import youtube_api_db
         
-        # Use synchronous operations - no async issues
-        api_keys_data = sync_db.get_all_api_keys()
-        users_data = sync_db.get_all_users()
+        # Professional database operations
+        api_keys_data = youtube_api_db.get_all_api_keys()
+        users_data = youtube_api_db.get_all_users()
         
         logger.info(f"Loaded {len(api_keys_data)} API keys and {len(users_data)} users")
         
@@ -401,14 +401,14 @@ def api_keys():
 def create_api_key():
     """Create new API key"""
     try:
-        from utils.sync_db import sync_db
+        from utils.sync_db import youtube_api_db
         
         user_id = request.form['user_id']
         key_name = request.form['name']
         rate_limit = int(request.form.get('rate_limit', 1000))
         
-        # Use synchronous database operations
-        api_key = sync_db.create_api_key(user_id, key_name, rate_limit)
+        # Professional API key creation
+        api_key = youtube_api_db.create_api_key(user_id, key_name, rate_limit)
         
         if api_key:
             flash(f'API key created successfully: {api_key}', 'success')
@@ -426,9 +426,9 @@ def create_api_key():
 def toggle_api_key(key_id):
     """Toggle API key active status"""
     try:
-        from utils.sync_db import sync_db
+        from utils.sync_db import youtube_api_db
         
-        if sync_db.toggle_api_key(key_id):
+        if youtube_api_db.toggle_api_key(key_id):
             flash('API key status updated successfully', 'success')
         else:
             flash('Error updating API key status', 'error')
@@ -444,9 +444,9 @@ def toggle_api_key(key_id):
 def delete_api_key(key_id):
     """Delete API key"""
     try:
-        from utils.sync_db import sync_db
+        from utils.sync_db import youtube_api_db
         
-        if sync_db.delete_api_key(key_id):
+        if youtube_api_db.delete_api_key(key_id):
             flash('API key deleted successfully', 'success')
         else:
             flash('API key not found', 'error')
