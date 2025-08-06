@@ -140,16 +140,51 @@ def initialize_app():
         
         # Initialize MongoDB connection
         try:
+            logger.info("🔄 Initializing MongoDB connection...")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(init_db())
+            success = loop.run_until_complete(init_db())
             loop.close()
-            logger.info("MongoDB connected successfully")
+            
+            if success:
+                logger.info("✅ MongoDB connected successfully")
+                print("✅ MongoDB connected successfully")  # Console output
+                
+                # Test database access
+                from database.simple_mongo import get_content_cache_collection
+                test_collection = get_content_cache_collection()
+                if test_collection is not None:
+                    logger.info("✅ Database collections accessible")
+                    print("✅ Database collections accessible")  # Console output
+                    
+                    # Test if cache entry exists
+                    async def test_cache():
+                        cache_entry = await test_collection.find_one({'youtube_id': 'dQw4w9WgXcQ'})
+                        return cache_entry is not None
+                    
+                    loop2 = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop2)
+                    has_cache = loop2.run_until_complete(test_cache())
+                    loop2.close()
+                    
+                    if has_cache:
+                        logger.info("🎯 CACHE VERIFICATION: Rick Astley video found in cache!")
+                        print("🎯 CACHE VERIFICATION: Rick Astley video found in cache!")
+                    else:
+                        logger.warning("⚠️ Cache entry not found")
+                        
+                else:
+                    logger.error("❌ Database collections not accessible")
+                    print("❌ Database collections not accessible")
+            else:
+                logger.error("❌ MongoDB connection failed")
+                print("❌ MongoDB connection failed")
+                
         except Exception as db_error:
-            logger.warning(f"Database initialization failed: {db_error}")
+            logger.error(f"❌ Database initialization failed: {db_error}")
             logger.info("Continuing with limited functionality")
         
-        logger.info("YouTube API Server initialized and ready for 10,000+ concurrent users")
+        logger.info("🚀 YouTube API Server initialized and ready for 10,000+ concurrent users")
         
     except Exception as e:
         logger.error(f"Failed to initialize application: {e}")

@@ -144,6 +144,27 @@ class APIService:
         start_time = datetime.utcnow()
         
         try:
+            # CRITICAL: Ensure database connection for caching
+            from database.simple_mongo import init_db, get_content_cache_collection
+            
+            logger.info("🔍 API SERVICE: Starting YouTube request processing...")
+            print("🔍 API SERVICE: Starting YouTube request processing...")  # Console print to ensure visibility
+            
+            # Test and initialize database if needed
+            collection = get_content_cache_collection()
+            logger.info(f"🔍 Database collection state: {'Available' if collection is not None else 'None'}")
+            
+            if collection is None:
+                logger.warning("🔥 CRITICAL: Database not initialized, initializing now...")
+                success = await init_db()
+                collection = get_content_cache_collection()
+                if collection is not None:
+                    logger.info("✅ Database connection restored successfully")
+                else:
+                    logger.error(f"❌ FAILED to initialize database connection (init_result: {success})")
+            else:
+                logger.info("✅ Database connection already available")
+            
             # Extract video ID
             video_id = self.youtube_downloader.extract_video_id(youtube_url)
             logger.info(f"🔍 Processing request for video ID: {video_id}")
