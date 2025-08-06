@@ -453,7 +453,8 @@ def create_api_key():
         client = MongoClient(mongo_uri)
         db = client.youtube_api_db
         
-        # Create API key document
+        # Create API key document with daily request tracking
+        current_date = datetime.utcnow().date()
         api_key_data = {
             '_id': str(uuid.uuid4()),
             'key': api_key,
@@ -462,6 +463,9 @@ def create_api_key():
             'is_active': True,
             'rate_limit': rate_limit,
             'usage_count': 0,
+            'daily_requests': 0,
+            'daily_limit': rate_limit,
+            'last_reset_date': current_date.isoformat(),
             'created_at': datetime.utcnow(),
             'expires_at': None,
             'permissions': ['youtube_download', 'metadata_access', 'streaming'],
@@ -492,10 +496,28 @@ def create_api_key():
 def toggle_api_key(key_id):
     """Toggle API key active status"""
     try:
-        from utils.sync_db import YouTubeAPIDatabase
+        # Simple direct API key toggle
+        import os
+        from pymongo import MongoClient
         
-        db = YouTubeAPIDatabase()
-        if db.toggle_api_key(key_id):
+        mongo_uri = os.getenv("MONGO_DB_URI", "mongodb+srv://jaydipmore74:xCpTm5OPAfRKYnif@cluster0.5jo18.mongodb.net/?retryWrites=true&w=majority")
+        client = MongoClient(mongo_uri)
+        db = client.youtube_api_db
+        
+        # Find and toggle the API key
+        key_data = db.api_keys.find_one({'_id': key_id})
+        success = False
+        if key_data:
+            new_status = not key_data.get('is_active', True)
+            result = db.api_keys.update_one(
+                {'_id': key_id},
+                {'$set': {'is_active': new_status}}
+            )
+            success = result.modified_count > 0
+        
+        client.close()
+        
+        if success:
             flash('API key status updated successfully', 'success')
         else:
             flash('Error updating API key status', 'error')
@@ -511,10 +533,21 @@ def toggle_api_key(key_id):
 def delete_api_key(key_id):
     """Delete API key"""
     try:
-        from utils.sync_db import YouTubeAPIDatabase
+        # Simple direct API key deletion
+        import os
+        from pymongo import MongoClient
         
-        db = YouTubeAPIDatabase()
-        if db.delete_api_key(key_id):
+        mongo_uri = os.getenv("MONGO_DB_URI", "mongodb+srv://jaydipmore74:xCpTm5OPAfRKYnif@cluster0.5jo18.mongodb.net/?retryWrites=true&w=majority")
+        client = MongoClient(mongo_uri)
+        db = client.youtube_api_db
+        
+        # Delete the API key
+        result = db.api_keys.delete_one({'_id': key_id})
+        success = result.deleted_count > 0
+        
+        client.close()
+        
+        if success:
             flash('API key deleted successfully', 'success')
         else:
             flash('API key not found', 'error')

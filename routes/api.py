@@ -20,8 +20,8 @@ def run_async(coro):
 
 @api_bp.before_request
 def before_request():
-    """Validate API key for all API requests"""
-    if request.endpoint and 'api.' in request.endpoint:
+    """Validate API key and check daily rate limits for all API requests"""
+    if request.endpoint and 'api.' in request.endpoint and request.endpoint != 'api.get_status':
         api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
         
         if not api_key:
@@ -31,26 +31,36 @@ def before_request():
                 'message': 'Please provide API key in X-API-Key header or api_key parameter'
             }), 401
         
-        # Validate API key with MongoDB Atlas
-        try:
-            key_data = run_async(api_service.validate_api_key(api_key))
-            if not key_data:
-                key_data = {'is_valid': True, 'user_id': 'demo_user', 'rate_limit': 1000}
-        except Exception as e:
-            logger.error(f"API key validation failed: {e}")
-            # Fallback during connection issues
-            key_data = {'is_valid': True, 'user_id': 'demo_user', 'rate_limit': 1000}
+        # Check daily rate limit with automatic midnight reset
+        from services.rate_limiter import rate_limiter
         
-        if key_data and 'error' in key_data:
+        try:
+            rate_check = rate_limiter.check_and_update_daily_limit(api_key)
+            
+            if not rate_check['allowed']:
+                return jsonify({
+                    'status': False,
+                    'error': rate_check.get('error', 'Rate limit exceeded'),
+                    'daily_requests': rate_check['daily_requests'],
+                    'daily_limit': rate_check['daily_limit'],
+                    'remaining': rate_check['remaining'],
+                    'reset_at': rate_check['reset_at'],
+                    'message': f'Daily limit of {rate_check["daily_limit"]} requests exceeded. Resets at midnight (12:00 AM).'
+                }), 429
+                
+            # Store rate limit info in request context
+            request.api_key = api_key
+            request.rate_info = rate_check
+            
+            logger.info(f"API Request: {api_key[:10]}... | {rate_check['daily_requests']}/{rate_check['daily_limit']} | {rate_check['remaining']} remaining")
+            
+        except Exception as e:
+            logger.error(f"Rate limiter error: {e}")
             return jsonify({
                 'status': False,
-                'error': key_data['error'],
-                'message': 'Rate limit exceeded. Please try again later.'
-            }), 429
-        
-        # Store API key in request context
-        request.api_key = api_key
-        request.key_data = key_data
+                'error': 'Rate limiting service error',
+                'message': 'Please try again later'
+            }), 500
         
         # Register concurrent user
         session_id = session.get('session_id')
@@ -65,18 +75,42 @@ def before_request():
 
 @api_bp.route('/status', methods=['GET'])
 def get_status():
-    """Get API status and concurrent users"""
+    """Get API status and rate limit info"""
     try:
-        concurrent_users = run_async(api_service.get_concurrent_user_count())
-        return jsonify({
+        api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        
+        response_data = {
             'status': True,
             'server': 'YouTube API Server',
             'version': '1.0.0',
-            'concurrent_users': concurrent_users,
-            'cache_status': 'active',
-            'telegram_integration': 'enabled',
             'timestamp': datetime.utcnow().isoformat()
-        })
+        }
+        
+        # Add rate limit info if API key provided
+        if api_key:
+            from services.rate_limiter import rate_limiter
+            try:
+                stats = rate_limiter.get_api_key_stats(api_key)
+                if stats:
+                    response_data.update({
+                        'api_key_name': stats['key_name'],
+                        'daily_requests': stats['daily_requests'],
+                        'daily_limit': stats['daily_limit'],
+                        'remaining_requests': stats['remaining'],
+                        'total_usage': stats['total_usage'],
+                        'is_active': stats['is_active'],
+                        'daily_reset_at': stats['reset_at'].isoformat() if hasattr(stats['reset_at'], 'isoformat') else str(stats['reset_at'])
+                    })
+            except Exception as e:
+                logger.error(f"Error getting rate limit stats: {e}")
+        
+        try:
+            concurrent_users = run_async(api_service.get_concurrent_user_count())
+            response_data['concurrent_users'] = concurrent_users
+        except Exception:
+            response_data['concurrent_users'] = 0
+            
+        return jsonify(response_data)
     except Exception as e:
         logger.error(f"Status endpoint error: {e}")
         return jsonify({
@@ -84,8 +118,6 @@ def get_status():
             'server': 'YouTube API Server',
             'version': '1.0.0',
             'concurrent_users': 1,
-            'cache_status': 'active',
-            'telegram_integration': 'enabled',
             'timestamp': datetime.utcnow().isoformat()
         })
 
