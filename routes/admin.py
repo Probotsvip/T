@@ -288,17 +288,25 @@ class ProfessionalAdminService:
 # Professional admin service instance
 admin_service = ProfessionalAdminService()
 
-def run_async(coro):
-    """Professional async helper with error handling"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def run_async(coroutine):
+    """Helper to run async functions in sync context safely"""
     try:
-        return loop.run_until_complete(coro)
+        # Always create a new event loop in a separate thread
+        def run_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coroutine)
+            finally:
+                loop.close()
+        
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_thread)
+            return future.result(timeout=30)  # 30 second timeout
     except Exception as e:
         logger.error(f"Async operation failed: {e}")
         return None
-    finally:
-        loop.close()
 
 def admin_required(f):
     """Decorator to require admin authentication"""
@@ -371,29 +379,13 @@ def dashboard():
 def api_keys():
     """Manage API keys"""
     try:
-        api_keys_collection = get_api_keys_collection()
-        users_collection = get_users_collection()
+        from utils.sync_db import sync_db
         
-        # Get all API keys with user info
-        pipeline = [
-            {
-                '$lookup': {
-                    'from': 'users',
-                    'localField': 'user_id',
-                    'foreignField': '_id',
-                    'as': 'user'
-                }
-            },
-            {'$unwind': {'path': '$user', 'preserveNullAndEmptyArrays': True}},
-            {'$sort': {'created_at': -1}}
-        ]
+        # Use synchronous operations - no async issues
+        api_keys_data = sync_db.get_all_api_keys()
+        users_data = sync_db.get_all_users()
         
-        if api_keys_collection is not None and users_collection is not None:
-            api_keys_data = run_async(api_keys_collection.find({}).to_list(100))
-            users_data = run_async(users_collection.find({}).to_list(100))
-        else:
-            api_keys_data = []
-            users_data = []
+        logger.info(f"Loaded {len(api_keys_data)} API keys and {len(users_data)} users")
         
         return render_template('admin/api_keys.html', 
                              api_keys=api_keys_data, 
@@ -409,37 +401,19 @@ def api_keys():
 def create_api_key():
     """Create new API key"""
     try:
+        from utils.sync_db import sync_db
+        
         user_id = request.form['user_id']
         key_name = request.form['name']
         rate_limit = int(request.form.get('rate_limit', 1000))
         
-        # Create user if doesn't exist
-        users_collection = get_users_collection()
-        api_keys_collection = get_api_keys_collection()
+        # Use synchronous database operations
+        api_key = sync_db.create_api_key(user_id, key_name, rate_limit)
         
-        if users_collection is None or api_keys_collection is None:
-            raise Exception("Database collections not available")
-        
-        user = run_async(users_collection.find_one({'_id': user_id}))
-        
-        if not user:
-            # Create new user
-            username = request.form.get('username', f'user_{user_id[:8]}')
-            email = request.form.get('email', f'{username}@example.com')
-            
-            new_user = User(username=username, email=email, _id=user_id)
-            user_result = run_async(users_collection.insert_one(new_user.to_dict()))
-            if user_result is None:
-                raise Exception("Failed to create user")
-        
-        # Create API key
-        api_key = APIKey(user_id=user_id, name=key_name, rate_limit=rate_limit)
-        
-        result = run_async(api_keys_collection.insert_one(api_key.to_dict()))
-        if result is None:
-            raise Exception("Failed to insert API key into database")
-        
-        flash(f'API key created successfully: {api_key.key}', 'success')
+        if api_key:
+            flash(f'API key created successfully: {api_key}', 'success')
+        else:
+            flash('Error creating API key', 'error')
         
     except Exception as e:
         logger.error(f"API key creation error: {e}")
@@ -452,23 +426,12 @@ def create_api_key():
 def toggle_api_key(key_id):
     """Toggle API key active status"""
     try:
-        api_keys_collection = get_api_keys_collection()
+        from utils.sync_db import sync_db
         
-        if api_keys_collection is None:
-            raise Exception("Database collection not available")
-        
-        key_data = run_async(api_keys_collection.find_one({'_id': key_id}))
-        if key_data:
-            new_status = not key_data.get('is_active', True)
-            run_async(api_keys_collection.update_one(
-                {'_id': key_id},
-                {'$set': {'is_active': new_status}}
-            ))
-            
-            status_text = 'activated' if new_status else 'deactivated'
-            flash(f'API key {status_text} successfully', 'success')
+        if sync_db.toggle_api_key(key_id):
+            flash('API key status updated successfully', 'success')
         else:
-            flash('API key not found', 'error')
+            flash('Error updating API key status', 'error')
             
     except Exception as e:
         logger.error(f"API key toggle error: {e}")
@@ -481,10 +444,9 @@ def toggle_api_key(key_id):
 def delete_api_key(key_id):
     """Delete API key"""
     try:
-        api_keys_collection = get_api_keys_collection()
-        result = run_async(api_keys_collection.delete_one({'_id': key_id}))
+        from utils.sync_db import sync_db
         
-        if result.deleted_count > 0:
+        if sync_db.delete_api_key(key_id):
             flash('API key deleted successfully', 'success')
         else:
             flash('API key not found', 'error')
