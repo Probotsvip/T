@@ -5,36 +5,59 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, BinaryIO, List
 import httpx
-try:
-    from telegram.ext import Bot
-    from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter
-    from telegram.constants import ParseMode
-    TELEGRAM_AVAILABLE = True
-except ImportError:
-    try:
-        # Alternative import for different telegram library versions
-        from telegram import Bot
-        from telegram.error import TelegramError, BadRequest, NetworkError, TimedOut, RetryAfter  
-        from telegram.constants import ParseMode
-        TELEGRAM_AVAILABLE = True
-    except ImportError:
-        TELEGRAM_AVAILABLE = False
-    # Fallback classes for when telegram isn't available
-    class Bot:
-        def __init__(self, token): 
-            self.token = token
-        async def get_file(self, file_id): return None
-        async def send_audio(self, *args, **kwargs): return None
-        async def send_video(self, *args, **kwargs): return None
+# Use direct HTTP API calls for Telegram instead of python-telegram-bot library
+# which has import conflicts in this environment
+TELEGRAM_AVAILABLE = True
+
+# Define custom exceptions for Telegram errors
+class TelegramError(Exception): pass
+class BadRequest(TelegramError): pass
+class NetworkError(TelegramError): pass 
+class TimedOut(TelegramError): pass
+class RetryAfter(TelegramError): pass
+
+class ParseMode:
+    HTML = "HTML"
+
+class Bot:
+    """Simple Bot class using direct HTTP API calls"""
+    def __init__(self, token):
+        self.token = token
+        self.base_url = f"https://api.telegram.org/bot{token}"
     
-    class TelegramError(Exception): pass
-    class BadRequest(TelegramError): pass
-    class NetworkError(TelegramError): pass
-    class TimedOut(TelegramError): pass
-    class RetryAfter(TelegramError): pass
+    async def get_file(self, file_id):
+        """Get file info using direct API call"""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{self.base_url}/getFile", params={"file_id": file_id})
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("ok"):
+                    return data["result"]
+        return None
     
-    class ParseMode:
-        HTML = "HTML"
+    async def send_audio(self, chat_id, audio, **kwargs):
+        """Send audio using direct API call"""
+        async with httpx.AsyncClient() as client:
+            files = {"audio": audio}
+            data = {"chat_id": chat_id}
+            data.update(kwargs)
+            
+            response = await client.post(f"{self.base_url}/sendAudio", files=files, data=data)
+            if response.status_code == 200:
+                return response.json()
+        return None
+    
+    async def send_video(self, chat_id, video, **kwargs):
+        """Send video using direct API call"""
+        async with httpx.AsyncClient() as client:
+            files = {"video": video}
+            data = {"chat_id": chat_id}
+            data.update(kwargs)
+            
+            response = await client.post(f"{self.base_url}/sendVideo", files=files, data=data)
+            if response.status_code == 200:
+                return response.json()
+        return None
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
 from database.simple_mongo import get_content_cache_collection
 from models_simple import ContentCache
@@ -44,11 +67,15 @@ logger = LOGGER(__name__)
 
 class TelegramCache:
     def __init__(self):
-        self.telegram_available = TELEGRAM_AVAILABLE and TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID
+        # Check if we have proper credentials first
+        has_credentials = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID)
+        
+        self.telegram_available = TELEGRAM_AVAILABLE and has_credentials
         if self.telegram_available:
             try:
                 self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
                 self.channel_id = TELEGRAM_CHANNEL_ID
+                logger.info(f"✅ Telegram cache system ready: Channel {self.channel_id}")
             except Exception as e:
                 logger.error(f"Telegram bot initialization failed: {e}")
                 self.telegram_available = False
@@ -57,6 +84,11 @@ class TelegramCache:
         else:
             self.bot = None
             self.channel_id = None
+            if not TELEGRAM_AVAILABLE:
+                logger.warning("❌ Telegram library not available")
+            if not has_credentials:
+                logger.warning("❌ Missing Telegram credentials (token/channel)")
+            logger.warning("Telegram caching disabled - missing library or credentials")
             
         self.session = None
         self.upload_semaphore = asyncio.Semaphore(3)  # Limit concurrent uploads
