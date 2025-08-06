@@ -369,12 +369,55 @@ def dashboard():
 def api_keys():
     """Manage API keys"""
     try:
-        from utils.sync_db import YouTubeAPIDatabase
+        # Simple direct database access (bypassing the complex YouTubeAPIDatabase class)
+        import os
+        from pymongo import MongoClient
         
-        # Professional database operations
-        db = YouTubeAPIDatabase()
-        api_keys_data = db.get_all_api_keys()
-        users_data = db.get_all_users()
+        mongo_uri = os.getenv("MONGO_DB_URI", "mongodb+srv://jaydipmore74:xCpTm5OPAfRKYnif@cluster0.5jo18.mongodb.net/?retryWrites=true&w=majority")
+        client = MongoClient(mongo_uri)
+        db = client.youtube_api_db
+        
+        # Get API keys with user info
+        pipeline = [
+            {
+                '$lookup': {
+                    'from': 'users',
+                    'localField': 'user_id',
+                    'foreignField': '_id',
+                    'as': 'user_info'
+                }
+            },
+            {
+                '$sort': {'created_at': -1}
+            }
+        ]
+        
+        api_keys_raw = list(db.api_keys.aggregate(pipeline))
+        
+        # Format for template
+        api_keys_data = []
+        for key in api_keys_raw:
+            user_info = key.get('user_info', [{}])[0] if key.get('user_info') else {}
+            formatted_key = {
+                '_id': key.get('_id'),
+                'name': key.get('name'),
+                'key': key.get('key'),
+                'user_id': key.get('user_id'),
+                'is_active': key.get('is_active', True),
+                'rate_limit': key.get('rate_limit', 1000),
+                'usage_count': key.get('usage_count', 0),
+                'created_at': key.get('created_at'),
+                'user': {
+                    'username': user_info.get('username', 'Unknown'),
+                    'email': user_info.get('email', 'Unknown')
+                }
+            }
+            api_keys_data.append(formatted_key)
+        
+        # Get users
+        users_data = list(db.users.find({}))
+        
+        client.close()
         
         logger.info(f"Loaded {len(api_keys_data)} API keys and {len(users_data)} users")
         
@@ -392,15 +435,46 @@ def api_keys():
 def create_api_key():
     """Create new API key"""
     try:
-        from utils.sync_db import YouTubeAPIDatabase
+        # Simple direct API key creation
+        import os
+        import uuid
+        from datetime import datetime
+        from pymongo import MongoClient
         
         user_id = request.form['user_id']
         key_name = request.form['name']
         rate_limit = int(request.form.get('rate_limit', 1000))
         
-        # Professional API key creation
-        db = YouTubeAPIDatabase()
-        api_key = db.create_api_key(user_id, key_name, rate_limit)
+        # Generate API key
+        api_key = f"ytapi_{str(uuid.uuid4()).replace('-', '')[:20]}"
+        
+        # Connect to database
+        mongo_uri = os.getenv("MONGO_DB_URI", "mongodb+srv://jaydipmore74:xCpTm5OPAfRKYnif@cluster0.5jo18.mongodb.net/?retryWrites=true&w=majority")
+        client = MongoClient(mongo_uri)
+        db = client.youtube_api_db
+        
+        # Create API key document
+        api_key_data = {
+            '_id': str(uuid.uuid4()),
+            'key': api_key,
+            'user_id': user_id,
+            'name': key_name,
+            'is_active': True,
+            'rate_limit': rate_limit,
+            'usage_count': 0,
+            'created_at': datetime.utcnow(),
+            'expires_at': None,
+            'permissions': ['youtube_download', 'metadata_access', 'streaming'],
+            'status': 'active',
+            'tier': 'professional'
+        }
+        
+        # Insert into database
+        result = db.api_keys.insert_one(api_key_data)
+        client.close()
+        
+        # Check if successful
+        api_key = api_key if result.inserted_id else None
         
         if api_key:
             flash(f'API key created successfully: {api_key}', 'success')
