@@ -96,7 +96,7 @@ class YouTubeAPIDatabase:
             return []
     
     @staticmethod
-    def get_all_users() -> List[Dict[str, Any]]:
+    def get_all_users_static() -> List[Dict[str, Any]]:
         """Get all users synchronously"""
         try:
             # Create synchronous MongoDB client directly
