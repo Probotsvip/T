@@ -281,6 +281,7 @@ class ProfessionalAdminService:
             'performance': {'database': {'status': 'unavailable'}},
             'api_keys': {'active_keys': 0, 'total_keys': 0},
             'concurrent_users': {'current_active_users': 0},
+            'endpoint_stats': [],
             'status': 'fallback_mode'
         }
 
@@ -387,8 +388,12 @@ def api_keys():
             {'$sort': {'created_at': -1}}
         ]
         
-        api_keys_data = run_async(api_keys_collection.aggregate(pipeline).to_list(None))
-        users_data = run_async(users_collection.find({}).to_list(None))
+        if api_keys_collection is not None and users_collection is not None:
+            api_keys_data = run_async(api_keys_collection.find({}).to_list(100))
+            users_data = run_async(users_collection.find({}).to_list(100))
+        else:
+            api_keys_data = []
+            users_data = []
         
         return render_template('admin/api_keys.html', 
                              api_keys=api_keys_data, 
@@ -410,6 +415,11 @@ def create_api_key():
         
         # Create user if doesn't exist
         users_collection = get_users_collection()
+        api_keys_collection = get_api_keys_collection()
+        
+        if users_collection is None or api_keys_collection is None:
+            raise Exception("Database collections not available")
+        
         user = run_async(users_collection.find_one({'_id': user_id}))
         
         if not user:
@@ -418,14 +428,16 @@ def create_api_key():
             email = request.form.get('email', f'{username}@example.com')
             
             new_user = User(username=username, email=email, _id=user_id)
-            run_async(users_collection.insert_one(new_user.to_dict()))
+            user_result = run_async(users_collection.insert_one(new_user.to_dict()))
+            if user_result is None:
+                raise Exception("Failed to create user")
         
         # Create API key
-        api_key = APIKey(user_id=user_id, name=key_name)
-        api_key.rate_limit = rate_limit
+        api_key = APIKey(user_id=user_id, name=key_name, rate_limit=rate_limit)
         
-        api_keys_collection = get_api_keys_collection()
-        run_async(api_keys_collection.insert_one(api_key.to_dict()))
+        result = run_async(api_keys_collection.insert_one(api_key.to_dict()))
+        if result is None:
+            raise Exception("Failed to insert API key into database")
         
         flash(f'API key created successfully: {api_key.key}', 'success')
         
@@ -441,6 +453,9 @@ def toggle_api_key(key_id):
     """Toggle API key active status"""
     try:
         api_keys_collection = get_api_keys_collection()
+        
+        if api_keys_collection is None:
+            raise Exception("Database collection not available")
         
         key_data = run_async(api_keys_collection.find_one({'_id': key_id}))
         if key_data:
@@ -495,7 +510,14 @@ def analytics():
     except Exception as e:
         logger.error(f"Analytics page error: {e}")
         flash('Error loading analytics', 'error')
-        return render_template('admin/analytics.html', analytics={}, hours=24)
+        fallback_analytics = {
+            'endpoint_stats': [],
+            'total_requests': 0,
+            'cache_hit_rate': 0,
+            'performance_metrics': {},
+            'error': True
+        }
+        return render_template('admin/analytics.html', analytics=fallback_analytics, hours=24)
 
 @admin_bp.route('/api/stats')
 @admin_required  
