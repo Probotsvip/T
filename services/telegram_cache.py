@@ -12,14 +12,20 @@ try:
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
-    # Fallback classes
+    # Fallback classes for when telegram isn't available
     class Bot:
-        def __init__(self, token): pass
+        def __init__(self, token): 
+            self.token = token
+        async def get_file(self, file_id): return None
+        async def send_audio(self, *args, **kwargs): return None
+        async def send_video(self, *args, **kwargs): return None
+    
     class TelegramError(Exception): pass
     class BadRequest(TelegramError): pass
     class NetworkError(TelegramError): pass
     class TimedOut(TelegramError): pass
     class RetryAfter(TelegramError): pass
+    
     class ParseMode:
         HTML = "HTML"
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
@@ -454,11 +460,16 @@ class TelegramCache:
                 ]
             }
             
-            deleted_count = await cache_collection.delete_many(cleanup_query)
-            
-            # Update statistics
-            total_active = await cache_collection.count_documents({'status': 'active'})
-            total_inactive = await cache_collection.count_documents({'status': 'inactive'})
+            if cache_collection is not None:
+                deleted_count = await cache_collection.delete_many(cleanup_query)
+                
+                # Update statistics
+                total_active = await cache_collection.count_documents({'status': 'active'})
+                total_inactive = await cache_collection.count_documents({'status': 'inactive'})
+            else:
+                deleted_count = type('MockResult', (), {'deleted_count': 0})()
+                total_active = 0
+                total_inactive = 0
             
             logger.info(f"🧹 Professional cleanup complete:")
             logger.info(f"   - Removed: {deleted_count.deleted_count} entries")
